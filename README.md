@@ -9,9 +9,13 @@ A lightweight Windows system tray application that monitors GPU performance and 
 ## Features
 
 - **Dynamic Tray Icon**: 
-  - Real-time GPU Usage (TOP line) and GPU Memory (BOTTOM line) graphs directly in the taskbar.
+  - Real-time performance graphs directly in the taskbar.
+  - **Customizable**: Select up to 5 metrics (CPU, RAM, GPU, VRAM, GPU Temp) to display simultaneously.
   - Refresh rate: **1 FPS** (Once every second).
   - Dynamic Colors: Green (<50%), Yellow (<80%), Red (>=80%) based on usage levels.
+- **CSV Data Logging**:
+  - Save performance metrics to `gputray.csv` in real-time.
+  - Includes timestamps, CPU/RAM usage, and detailed GPU metrics for later analysis.
 - **Sleek Popup Dashboard** (Right-click):
   - Advanced visualization for 5 key metrics:
     - **CPU**: Usage (%)
@@ -69,6 +73,8 @@ You can download the latest version from the [Releases Page](https://github.com/
 - Once launched, look for the small 16x16 graph icon in your system tray.
 - **Hover**: View the app name.
 - **Right-Click**: Opens the performance dashboard with 5 detailed line graphs.
+- **Configure**: Use the **checkboxes** next to each metric in the dashboard to toggle its visibility in the system tray. (Maximum 5 items).
+- **Logging**: Check "Save metrics to gputray.csv" at the bottom of the dashboard to start recording data.
 - **Close**: Click "Close App" at the bottom of the dashboard to terminate.
 
 ## License
