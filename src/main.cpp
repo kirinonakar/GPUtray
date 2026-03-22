@@ -62,7 +62,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     g_trayIcon = new TrayIcon(hWnd, g_monitor);
     if (!g_trayIcon->Initialize()) return 0;
 
-    g_graphPopup = new GraphPopup(hWnd, g_monitor);
+    g_graphPopup = new GraphPopup(hWnd, g_monitor, g_trayIcon);
     if (!g_graphPopup->Create()) return 0;
 
     // 1s Refresh Timer

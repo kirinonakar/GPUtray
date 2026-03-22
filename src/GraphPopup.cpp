@@ -3,10 +3,16 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#include <fstream>
+#include <chrono>
+#include <ctime>
 
 using namespace Gdiplus;
 
-GraphPopup::GraphPopup(HWND hParent, GpuMonitor* monitor) : m_hWnd(NULL), m_hParent(hParent), m_monitor(monitor) {
+#include "TrayIcon.h"
+
+GraphPopup::GraphPopup(HWND hParent, GpuMonitor* monitor, TrayIcon* trayIcon) : m_hWnd(NULL), m_hParent(hParent), m_monitor(monitor), m_trayIcon(trayIcon) {
+    UpdateTrayMetrics();
 }
 
 GraphPopup::~GraphPopup() {
@@ -53,6 +59,39 @@ void GraphPopup::Update(const SystemStats& stats) {
     if (m_hWnd && IsWindowVisible(m_hWnd)) {
         InvalidateRect(m_hWnd, NULL, FALSE);
     }
+
+    if (m_saveLog) {
+        bool isNew = !std::ifstream("gputray.csv").good();
+        std::ofstream log("gputray.csv", std::ios::app);
+        if (log.is_open()) {
+            if (isNew) {
+                log << "\xEF\xBB\xBFTime,CPU Usage(%),RAM Usage(%),GPU Name,GPU Usage(%),GPU Memory(%),GPU Temp(°C)" << std::endl;
+            }
+            
+            auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+            struct tm timeinfo;
+            localtime_s(&timeinfo, &now);
+            wchar_t timeStr[64];
+            wcsftime(timeStr, 64, L"%Y-%m-%d %H:%M:%S", &timeinfo);
+            
+            std::wstringstream ss;
+            ss << timeStr << L","
+                << (int)stats.cpuUsage << L","
+                << (int)stats.memoryUsage << L","
+                << stats.gpuName << L","
+                << (int)stats.gpuUsage << L","
+                << (int)stats.gpuMemoryUsage << L","
+                << (int)stats.gpuTemp;
+            
+            std::wstring wideMsg = ss.str();
+            int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wideMsg.c_str(), -1, NULL, 0, NULL, NULL);
+            if (utf8Len > 0) {
+                std::vector<char> utf8Msg(utf8Len);
+                WideCharToMultiByte(CP_UTF8, 0, wideMsg.c_str(), -1, utf8Msg.data(), utf8Len, NULL, NULL);
+                log << utf8Msg.data() << std::endl;
+            }
+        }
+    }
 }
 
 LRESULT CALLBACK GraphPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -70,7 +109,30 @@ LRESULT CALLBACK GraphPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPA
         return 0;
     case WM_LBUTTONDOWN:
     {
+        int x = LOWORD(lParam);
         int y = HIWORD(lParam);
+        
+        for (const auto& area : pThis->m_clickAreas) {
+            if (x >= area.rect.left && x <= area.rect.right && y >= area.rect.top && y <= area.rect.bottom) {
+                if (!area.isLog) {
+                    bool currentlySelected = pThis->m_selectedMetrics[(int)area.metric];
+                    if (!currentlySelected) {
+                        // Count total selected
+                        int count = 0;
+                        for (int i = 0; i < (int)Metric::COUNT; ++i) if (pThis->m_selectedMetrics[i]) count++;
+                        if (count >= 5) break; 
+                    }
+                    pThis->m_selectedMetrics[(int)area.metric] = !currentlySelected;
+                    pThis->UpdateTrayMetrics();
+                    InvalidateRect(hWnd, NULL, FALSE);
+                } else {
+                    pThis->m_saveLog = !pThis->m_saveLog;
+                    InvalidateRect(hWnd, NULL, FALSE);
+                }
+                break;
+            }
+        }
+
         if (y > pThis->m_height - 70) { // Larger exit button area
             PostQuitMessage(0);
         }
@@ -100,23 +162,44 @@ void GraphPopup::OnPaint(HWND hWnd) {
         return ss.str();
     };
 
+    m_clickAreas.clear();
+
     int y = 10;
-    DrawGraphItem(g, L"CPU Usage", m_history.cpuUsage, y, Color(255, 100, 200, 255), m_lastStats.cpuUsage, L"%");
+    DrawGraphItem(g, Metric::CPU, L"CPU Usage", m_history.cpuUsage, y, Color(255, 100, 200, 255), m_lastStats.cpuUsage, L"%");
     
     std::wstring ramExtra = L" (" + formatMem(m_lastStats.ramUsed, m_lastStats.ramTotal) + L")";
-    DrawGraphItem(g, L"Memory Usage", m_history.memoryUsage, y, Color(255, 100, 255, 100), m_lastStats.memoryUsage, L"%", ramExtra);
+    DrawGraphItem(g, Metric::RAM, L"Memory Usage", m_history.memoryUsage, y, Color(255, 100, 255, 100), m_lastStats.memoryUsage, L"%", ramExtra);
     
-    DrawGraphItem(g, L"GPU Usage (" + m_lastStats.gpuName + L")", m_history.gpuUsage, y, Color(255, 200, 200, 100), m_lastStats.gpuUsage, L"%");
+    DrawGraphItem(g, Metric::GPU, L"GPU Usage (" + m_lastStats.gpuName + L")", m_history.gpuUsage, y, Color(255, 200, 200, 100), m_lastStats.gpuUsage, L"%");
     
     std::wstring gpuExtra = L" (D:" + formatMem(m_lastStats.gpuMemUsed, m_lastStats.gpuMemTotal) + 
                              L", S:" + formatMem(m_lastStats.gpuSharedUsed, m_lastStats.gpuSharedTotal) + L")";
-    DrawGraphItem(g, L"GPU Memory", m_history.gpuMemoryUsage, y, Color(255, 200, 100, 255), m_lastStats.gpuMemoryUsage, L"%", gpuExtra);
+    DrawGraphItem(g, Metric::GPU_MEM, L"GPU Memory", m_history.gpuMemoryUsage, y, Color(255, 200, 100, 255), m_lastStats.gpuMemoryUsage, L"%", gpuExtra);
     
     std::wstring tempLabel = L"GPU Temp";
     if (m_lastStats.gpuTemp <= 0) {
         tempLabel += L" (N/A)";
     }
-    DrawGraphItem(g, tempLabel, m_history.gpuTemp, y, Color(255, 255, 200, 100), m_lastStats.gpuTemp, L"\u00B0C");
+    DrawGraphItem(g, Metric::GPU_TEMP, tempLabel, m_history.gpuTemp, y, Color(255, 255, 200, 100), m_lastStats.gpuTemp, L"\u00B0C");
+
+    // Save Log Checkbox
+    y += 10;
+    Font logFont(L"Arial", 11, FontStyleRegular);
+    Font logCheckFont(L"Arial", 15, FontStyleBold);
+    SolidBrush logWhiteBrush(Color(255, 230, 230, 230));
+    SolidBrush logSelectedBrush(Color(255, 100, 255, 100));
+
+    Pen logCheckPen(Color(255, 150, 150, 150), 1.0f);
+    g.DrawRectangle(&logCheckPen, 10, y, 20, 20);
+    if (m_saveLog) {
+        g.DrawString(L"\u2713", -1, &logCheckFont, PointF(1, (REAL)y - 7), &logSelectedBrush);
+    }
+    g.DrawString(L"Save metrics to gputray.csv", -1, &logFont, PointF(40, (REAL)y), &logWhiteBrush);
+    
+    ClickArea logArea;
+    logArea.rect = { 5, y - 5, 300, y + 25 };
+    logArea.isLog = true;
+    m_clickAreas.push_back(logArea);
 
     // Exit Button (centered at bottom, much larger)
     const int btnHeight = 50;
@@ -134,12 +217,33 @@ void GraphPopup::OnPaint(HWND hWnd) {
     EndPaint(hWnd, &ps);
 }
 
-void GraphPopup::DrawGraphItem(Graphics& g, const std::wstring& label, const std::deque<float>& history, int& yPos, Color color, float currentVal, const std::wstring& unit, const std::wstring& extra) {
+void GraphPopup::DrawGraphItem(Graphics& g, Metric metric, const std::wstring& label, const std::deque<float>& history, int& yPos, Color color, float currentVal, const std::wstring& unit, const std::wstring& extra) {
     Font font(L"Arial", 10, FontStyleRegular);
+    Font checkFont(L"Arial", 14, FontStyleBold);
     SolidBrush whiteBrush(Color(255, 230, 230, 230));
+    SolidBrush selectedBrush(Color(255, 100, 200, 255));
     
+    bool isSelected = m_selectedMetrics[(int)metric];
+    
+    // Checkbox
+    const int checkX = 10;
+    const int checkY = yPos;
+    const int checkSize = 20;
+    
+    Pen checkPen(Color(255, 150, 150, 150), 1.0f);
+    g.DrawRectangle(&checkPen, checkX, checkY, checkSize, checkSize);
+    if (isSelected) {
+        g.DrawString(L"\u2713", -1, &checkFont, PointF((REAL)checkX-9, (REAL)checkY-7), &selectedBrush);
+    }
+    
+    ClickArea area;
+    area.rect = { checkX - 5, checkY - 5, checkX + checkSize + 200, checkY + checkSize + 5 };
+    area.metric = metric;
+    area.isLog = false;
+    m_clickAreas.push_back(area);
+
     std::wstring info = label + L": " + std::to_wstring((int)currentVal) + unit + extra;
-    g.DrawString(info.c_str(), -1, &font, PointF(10, (REAL)yPos), &whiteBrush);
+    g.DrawString(info.c_str(), -1, &font, PointF(40, (REAL)yPos), &whiteBrush);
     
     yPos += 22;
     Pen borderPen(Color(100, 100, 100, 100));
@@ -164,4 +268,16 @@ void GraphPopup::DrawGraphItem(Graphics& g, const std::wstring& label, const std
         }
     }
     yPos += graphHeight + 15;
+}
+
+void GraphPopup::UpdateTrayMetrics() {
+    std::vector<Metric> active;
+    for (int i = 0; i < (int)Metric::COUNT; ++i) {
+        if (m_selectedMetrics[i]) {
+            active.push_back((Metric)i);
+        }
+    }
+    if (m_trayIcon) {
+        m_trayIcon->SetActiveMetrics(active);
+    }
 }

@@ -5,6 +5,9 @@
 #include <string>
 #include <vector>
 
+enum class Metric { CPU, RAM, GPU, GPU_MEM, GPU_TEMP, COUNT };
+
+
 struct SystemStats {
     float cpuUsage;
     float memoryUsage;

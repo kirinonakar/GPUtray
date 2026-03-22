@@ -6,9 +6,10 @@
 #include <vector>
 #include "GpuMonitor.h"
 
+class TrayIcon;
 class GraphPopup {
 public:
-    GraphPopup(HWND hParent, GpuMonitor* monitor);
+    GraphPopup(HWND hParent, GpuMonitor* monitor, TrayIcon* trayIcon);
     ~GraphPopup();
 
     bool Create();
@@ -20,11 +21,23 @@ public:
 
 private:
     void OnPaint(HWND hWnd);
-    void DrawGraphItem(Gdiplus::Graphics& g, const std::wstring& label, const std::deque<float>& history, int& yPos, Gdiplus::Color color, float currentVal, const std::wstring& unit, const std::wstring& extra = L"");
+    void DrawGraphItem(Gdiplus::Graphics& g, Metric metric, const std::wstring& label, const std::deque<float>& history, int& yPos, Gdiplus::Color color, float currentVal, const std::wstring& unit, const std::wstring& extra = L"");
+    void UpdateTrayMetrics();
 
     HWND m_hWnd;
     HWND m_hParent;
     GpuMonitor* m_monitor;
+    TrayIcon* m_trayIcon;
+
+    bool m_selectedMetrics[(int)Metric::COUNT] = { false, false, true, true, false }; // Default: GPU, GPU_MEM
+    bool m_saveLog = false;
+    
+    struct ClickArea {
+        RECT rect;
+        Metric metric;
+        bool isLog;
+    };
+    std::vector<ClickArea> m_clickAreas;
 
     struct HistoryData {
         std::deque<float> cpuUsage;
@@ -38,5 +51,5 @@ private:
 
     const int m_historyLimit = 100;
     const int m_width = 600;
-    const int m_height = 700;
+    const int m_height = 750;
 };

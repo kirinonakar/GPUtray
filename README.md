@@ -16,7 +16,7 @@ A lightweight Windows system tray application that monitors GPU performance and 
   - Advanced visualization for 5 key metrics:
     - **CPU**: Usage (%)
     - **Memory**: RAM Utilization (%)
-    - **GPU**: Engine Utilization (%), Video Memory (%), Temperature (C)
+    - **GPU**: Engine Utilization (%), Video Memory (%), Temperature (°C)
   - Dark-themed, sleek UI design.
   - One-click exit button.
 
