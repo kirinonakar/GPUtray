@@ -18,8 +18,17 @@ add_executable(${PROJECT_NAME} WIN32 ${SOURCES})
 
 # MSVC Specific hardening flags to reduce false positives
 if(MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE /GS /guard:cf /ZH:SHA_256)
-    target_link_options(${PROJECT_NAME} PRIVATE /DYNAMICBASE /NXCOMPAT /GUARD:CF /OPT:REF /OPT:ICF)
+    # /MT: Static CRT, /GS: Stack protection, /guard:cf: Control flow guard, /ZH:SHA_256: Hashing
+    # /GL: Whole Program Optimization, /O2: Speed
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_options(${PROJECT_NAME} PRIVATE 
+        /GS /guard:cf /ZH:SHA_256
+        $<$<CONFIG:Release>:/O2 /Oi /GL /Gy>
+    )
+    target_link_options(${PROJECT_NAME} PRIVATE 
+        /DYNAMICBASE /NXCOMPAT /GUARD:CF /OPT:REF /OPT:ICF
+        $<$<CONFIG:Release>:/LTCG /INCREMENTAL:NO>
+    )
 endif()
 
 # Include directory
