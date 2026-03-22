@@ -26,8 +26,9 @@ if not exist "build" mkdir "build"
 cd build
 
 :: Configure and Build
-echo Configuring CMake...
-cmake ..
+echo Configuring CMake with security hardening...
+if exist "CMakeCache.txt" del /f /q "CMakeCache.txt"
+cmake -DCMAKE_BUILD_TYPE=Release ..
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] CMake configuration failed.
     pause
@@ -36,7 +37,7 @@ if %ERRORLEVEL% neq 0 (
 
 echo.
 echo Building Project (Release)...
-cmake --build . --config Release
+cmake --build . --config Release --clean-first
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Build failed.
     pause

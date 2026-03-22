@@ -217,7 +217,13 @@ float GpuMonitor::GetGpuMemoryUsageDxgi() {
 }
 
 bool GpuMonitor::InitNvml() {
-    m_hNvml = LoadLibraryA("nvml.dll");
+    // Try to load nvml.dll from system folder first (more secure)
+    m_hNvml = LoadLibraryExW(L"nvml.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!m_hNvml) {
+        // Fallback for some drivers: try standard load if system load fails
+        m_hNvml = LoadLibraryW(L"nvml.dll");
+    }
+    
     if (!m_hNvml) return false;
 
     auto init = (pfnNvmlInit)GetProcAddress(m_hNvml, "nvmlInit");

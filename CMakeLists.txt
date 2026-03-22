@@ -16,6 +16,12 @@ set(SOURCES
 
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES})
 
+# MSVC Specific hardening flags to reduce false positives
+if(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /GS /guard:cf /ZH:SHA_256)
+    target_link_options(${PROJECT_NAME} PRIVATE /DYNAMICBASE /NXCOMPAT /GUARD:CF /OPT:REF /OPT:ICF)
+endif()
+
 # Include directory
 target_include_directories(${PROJECT_NAME} PRIVATE include)
 
