@@ -34,6 +34,7 @@ private:
     PDH_HCOUNTER m_hCpuCounter = nullptr;
     PDH_HCOUNTER m_hGpuCounter = nullptr;
     std::vector<PDH_HCOUNTER> m_gpuCounters;
+    std::vector<PDH_HCOUNTER> m_gpuSharedCounters;
 
     // NVML for NVIDIA GPUs
     HMODULE m_hNvml = nullptr;

@@ -96,20 +96,20 @@ void GraphPopup::OnPaint(HWND hWnd) {
 
     auto formatMem = [](float used, float total) {
         std::wstringstream ss;
-        ss << L" (" << std::fixed << std::setprecision(1) << used << L" / " << total << L" GB)";
+        ss << std::fixed << std::setprecision(1) << used << L"/" << total << L"G";
         return ss.str();
     };
 
     int y = 10;
     DrawGraphItem(g, L"CPU Usage", m_history.cpuUsage, y, Color(255, 100, 200, 255), m_lastStats.cpuUsage, L"%");
     
-    std::wstring ramExtra = formatMem(m_lastStats.ramUsed, m_lastStats.ramTotal);
+    std::wstring ramExtra = L" (" + formatMem(m_lastStats.ramUsed, m_lastStats.ramTotal) + L")";
     DrawGraphItem(g, L"Memory Usage", m_history.memoryUsage, y, Color(255, 100, 255, 100), m_lastStats.memoryUsage, L"%", ramExtra);
     
     DrawGraphItem(g, L"GPU Usage (" + m_lastStats.gpuName + L")", m_history.gpuUsage, y, Color(255, 200, 200, 100), m_lastStats.gpuUsage, L"%");
     
-    std::wstring gpuExtra = formatMem(m_lastStats.gpuMemUsed, m_lastStats.gpuMemTotal) + 
-                             formatMem(m_lastStats.gpuSharedUsed, m_lastStats.gpuSharedTotal);
+    std::wstring gpuExtra = L" (D:" + formatMem(m_lastStats.gpuMemUsed, m_lastStats.gpuMemTotal) + 
+                             L", S:" + formatMem(m_lastStats.gpuSharedUsed, m_lastStats.gpuSharedTotal) + L")";
     DrawGraphItem(g, L"GPU Memory", m_history.gpuMemoryUsage, y, Color(255, 200, 100, 255), m_lastStats.gpuMemoryUsage, L"%", gpuExtra);
     
     std::wstring tempLabel = L"GPU Temp";

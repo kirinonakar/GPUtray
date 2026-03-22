@@ -54,6 +54,14 @@ bool GpuMonitor::Initialize() {
     }
     if (hGpuMem) m_gpuCounters.push_back(hGpuMem);
 
+    PDH_HCOUNTER hGpuShared = nullptr;
+    if (PdhAddEnglishCounterW(m_hQuery, L"\\GPU Adapter Memory(*)\\Shared Usage", 0, &hGpuShared) != ERROR_SUCCESS) {
+        if (PdhAddCounterW(m_hQuery, L"\\GPU Adapter Memory(*)\\Shared Usage", 0, &hGpuShared) != ERROR_SUCCESS) {
+             PdhAddCounterW(m_hQuery, L"\\GPU 어댑터 메모리(*)\\Shared Usage", 0, &hGpuShared);
+        }
+    }
+    if (hGpuShared) m_gpuSharedCounters.push_back(hGpuShared);
+
     PdhCollectQueryData(m_hQuery);
     InitWmi();
     
@@ -131,7 +139,7 @@ SystemStats GpuMonitor::Update() {
                 pAdapter3->Release();
             }
             totalMax += (float)desc1.DedicatedVideoMemory;
-            sharedMax += (float)desc1.SharedSystemMemory;
+            sharedMax = (std::max)(sharedMax, (float)desc1.SharedSystemMemory);
             pAdapter1->Release();
         }
         pFactory->Release();
@@ -141,19 +149,35 @@ SystemStats GpuMonitor::Update() {
     stats.gpuSharedUsed = sharedUsed / (1024.0f * 1024.0f * 1024.0f);
     stats.gpuSharedTotal = sharedMax / (1024.0f * 1024.0f * 1024.0f);
 
+    // Ensure Shared total is at least 50% of RAM if DXGI shows 0
+    if (stats.gpuSharedTotal <= 0) {
+        stats.gpuSharedTotal = stats.ramTotal / 2.0f;
+    }
+
     // Fallback if DXGI usage is 0 but PDH has something
-    if (stats.gpuMemUsed <= 0 && !m_gpuCounters.empty() && m_gpuCounters[0]) {
+    auto GetPdhSum = [&](const std::vector<PDH_HCOUNTER>& counters) -> float {
+        if (counters.empty() || !counters[0]) return 0;
         DWORD dwSize = 0, dwCount = 0;
-        PdhGetFormattedCounterArray(m_gpuCounters[0], PDH_FMT_DOUBLE, &dwSize, &dwCount, NULL);
+        PdhGetFormattedCounterArray(counters[0], PDH_FMT_DOUBLE, &dwSize, &dwCount, NULL);
         if (dwSize > 0) {
             std::vector<BYTE> buf(dwSize);
             PPDH_FMT_COUNTERVALUE_ITEM pItems = (PPDH_FMT_COUNTERVALUE_ITEM)buf.data();
-            if (PdhGetFormattedCounterArray(m_gpuCounters[0], PDH_FMT_DOUBLE, &dwSize, &dwCount, pItems) == ERROR_SUCCESS) {
-                float pdhSum = 0;
-                for (DWORD i = 0; i < dwCount; i++) pdhSum += (float)pItems[i].FmtValue.doubleValue;
-                stats.gpuMemUsed = pdhSum / (1024.0f * 1024.0f * 1024.0f);
+            if (PdhGetFormattedCounterArray(counters[0], PDH_FMT_DOUBLE, &dwSize, &dwCount, pItems) == ERROR_SUCCESS) {
+                float sum = 0;
+                for (DWORD i = 0; i < dwCount; i++) sum += (float)pItems[i].FmtValue.doubleValue;
+                return sum / (1024.0f * 1024.0f * 1024.0f);
             }
         }
+        return 0;
+    };
+
+    if (stats.gpuMemUsed <= 1e-4f) {
+        float fallback = GetPdhSum(m_gpuCounters);
+        if (fallback > 0) stats.gpuMemUsed = fallback;
+    }
+    if (stats.gpuSharedUsed <= 1e-4f) {
+        float fallback = GetPdhSum(m_gpuSharedCounters);
+        if (fallback > 0) stats.gpuSharedUsed = fallback;
     }
 
     stats.cpuUsage = std::clamp(stats.cpuUsage, 0.0f, 100.0f);

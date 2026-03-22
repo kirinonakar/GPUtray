@@ -38,5 +38,5 @@ private:
 
     const int m_historyLimit = 100;
     const int m_width = 600;
-    const int m_height = 730;
+    const int m_height = 700;
 };
