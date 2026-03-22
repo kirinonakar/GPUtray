@@ -1,6 +1,6 @@
 # GpuTray
 
-A lightweight Windows system tray application that monitors GPU and CPU performance with real-time dynamic graphs.
+A lightweight Windows system tray application that monitors GPU performance and system resource usage with real-time dynamic graphs.
 
 ## Features
 
@@ -9,8 +9,8 @@ A lightweight Windows system tray application that monitors GPU and CPU performa
   - Refresh rate: **1 FPS** (Once every second).
   - Dynamic Colors: Green (<50%), Yellow (<80%), Red (>=80%) based on usage levels.
 - **Sleek Popup Dashboard** (Right-click):
-  - Advanced visualization for 6 key metrics:
-    - **CPU**: Usage (%), Temperature (C)
+  - Advanced visualization for 5 key metrics:
+    - **CPU**: Usage (%)
     - **Memory**: RAM Utilization (%)
     - **GPU**: Engine Utilization (%), Video Memory (%), Temperature (C)
   - Dark-themed, sleek UI design.
@@ -27,15 +27,11 @@ A lightweight Windows system tray application that monitors GPU and CPU performa
 
 ## Temperature Monitoring Logic
 
-The application uses a multi-layered approach to ensure accurate temperature readings across different hardware:
+The application uses real-time metrics to ensure accurate GPU temperature readings across different hardware:
 
 ### GPU Temperature
 1. **Primary (NVML)**: Standard for NVIDIA GPUs. If `nvml.dll` is present, it directly communicates with the NVIDIA Management Library for high-precision real-time metrics.
 2. **Fallback (WMI)**: For integrated or non-NVIDIA GPUs, it queries the `Win32_VideoController` WMI class to retrieve available thermal data.
-
-### CPU Temperature
-1. **Multi-source WMI**: Queries multiple namespaces (`ROOT\WMI`, `ROOT\CIMV2`) and classes (e.g., `MSAcpi_ThermalZoneTemperature`, `ThermalZoneInformation`) to find active sensors.
-2. **Heuristic Fallback**: If system sensors are inaccessible due to permission restrictions or hardware limitations, a dynamic heuristic model (`40°C + load-based factor`) is used to provide a responsive and realistic temperature estimation based on CPU utilization.
 
 ## 🚀 Getting Started
 
@@ -68,7 +64,7 @@ You can download the latest version from the [Releases Page](https://github.com/
 
 - Once launched, look for the small 16x16 graph icon in your system tray.
 - **Hover**: View the app name.
-- **Right-Click**: Opens the performance dashboard with 6 detailed line graphs.
+- **Right-Click**: Opens the performance dashboard with 5 detailed line graphs.
 - **Close**: Click "Close App" at the bottom of the dashboard to terminate.
 
 ## License

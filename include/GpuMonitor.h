@@ -7,7 +7,6 @@
 
 struct SystemStats {
     float cpuUsage;
-    float cpuTemp;
     float memoryUsage;
     float ramUsed;  // GB
     float ramTotal; // GB
@@ -47,7 +46,6 @@ private:
     // WMI for Temperatures and Fallback
     bool InitWmi();
     void CleanupWmi();
-    float GetCpuTempWmi(float cpuUsage);
     float GetGpuTempWmi();
     std::wstring GetGpuNameWmi();
 

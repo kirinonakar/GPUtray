@@ -41,14 +41,13 @@ void GraphPopup::Hide() {
 void GraphPopup::Update(const SystemStats& stats) {
     m_lastStats = stats;
     m_history.cpuUsage.push_back(stats.cpuUsage);
-    m_history.cpuTemp.push_back(stats.cpuTemp);
     m_history.memoryUsage.push_back(stats.memoryUsage);
     m_history.gpuUsage.push_back(stats.gpuUsage);
     m_history.gpuMemoryUsage.push_back(stats.gpuMemoryUsage);
     m_history.gpuTemp.push_back(stats.gpuTemp);
 
     auto limit = [&](std::deque<float>& h) { if (h.size() > m_historyLimit) h.pop_front(); };
-    limit(m_history.cpuUsage); limit(m_history.cpuTemp); limit(m_history.memoryUsage);
+    limit(m_history.cpuUsage); limit(m_history.memoryUsage);
     limit(m_history.gpuUsage); limit(m_history.gpuMemoryUsage); limit(m_history.gpuTemp);
 
     if (m_hWnd && IsWindowVisible(m_hWnd)) {
@@ -103,7 +102,6 @@ void GraphPopup::OnPaint(HWND hWnd) {
 
     int y = 10;
     DrawGraphItem(g, L"CPU Usage", m_history.cpuUsage, y, Color(255, 100, 200, 255), m_lastStats.cpuUsage, L"%");
-    DrawGraphItem(g, L"CPU Temp", m_history.cpuTemp, y, Color(255, 255, 100, 100), m_lastStats.cpuTemp, L"\u00B0C");
     
     std::wstring ramExtra = formatMem(m_lastStats.ramUsed, m_lastStats.ramTotal);
     DrawGraphItem(g, L"Memory Usage", m_history.memoryUsage, y, Color(255, 100, 255, 100), m_lastStats.memoryUsage, L"%", ramExtra);

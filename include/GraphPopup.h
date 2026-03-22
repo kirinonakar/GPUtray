@@ -28,7 +28,6 @@ private:
 
     struct HistoryData {
         std::deque<float> cpuUsage;
-        std::deque<float> cpuTemp;
         std::deque<float> memoryUsage;
         std::deque<float> gpuUsage;
         std::deque<float> gpuMemoryUsage;
@@ -39,5 +38,5 @@ private:
 
     const int m_historyLimit = 100;
     const int m_width = 600;
-    const int m_height = 850;
+    const int m_height = 730;
 };
