@@ -25,6 +25,18 @@ A lightweight Windows system tray application that monitors GPU and CPU performa
 - **DXGI**: Accurate Video Memory (VRAM) tracking.
 - **WMI**: System temperature retrieval.
 
+## Temperature Monitoring Logic
+
+The application uses a multi-layered approach to ensure accurate temperature readings across different hardware:
+
+### GPU Temperature
+1. **Primary (NVML)**: Standard for NVIDIA GPUs. If `nvml.dll` is present, it directly communicates with the NVIDIA Management Library for high-precision real-time metrics.
+2. **Fallback (WMI)**: For integrated or non-NVIDIA GPUs, it queries the `Win32_VideoController` WMI class to retrieve available thermal data.
+
+### CPU Temperature
+1. **Multi-source WMI**: Queries multiple namespaces (`ROOT\WMI`, `ROOT\CIMV2`) and classes (e.g., `MSAcpi_ThermalZoneTemperature`, `ThermalZoneInformation`) to find active sensors.
+2. **Heuristic Fallback**: If system sensors are inaccessible due to permission restrictions or hardware limitations, a dynamic heuristic model (`40°C + load-based factor`) is used to provide a responsive and realistic temperature estimation based on CPU utilization.
+
 ## Building from Source
 
 ### Prerequisites
