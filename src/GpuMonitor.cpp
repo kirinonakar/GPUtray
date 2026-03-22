@@ -11,10 +11,24 @@
 #pragma comment(lib, "wbemuuid.lib")
 #pragma comment(lib, "dxgi.lib")
 
+typedef enum nvmlReturn_enum { NVML_SUCCESS = 0 } nvmlReturn_t;
+typedef struct nvmlDevice_st* nvmlDevice_t;
+typedef enum nvmlTemperatureSensors_enum { NVML_TEMPERATURE_GPU = 0 } nvmlTemperatureSensors_t;
+typedef nvmlReturn_t (*pfnNvmlInit)(void);
+typedef nvmlReturn_t (*pfnNvmlShutdown)(void);
+typedef nvmlReturn_t (*pfnNvmlDeviceGetHandleByIndex)(unsigned int, nvmlDevice_t*);
+typedef nvmlReturn_t (*pfnNvmlDeviceGetTemperature)(nvmlDevice_t, nvmlTemperatureSensors_t, unsigned int*);
+typedef nvmlReturn_t (*pfnNvmlDeviceGetName)(nvmlDevice_t, char*, unsigned int);
+
 GpuMonitor::GpuMonitor() {}
 
 GpuMonitor::~GpuMonitor() {
     if (m_hQuery) PdhCloseQuery(m_hQuery);
+    if (m_nvmlInitialized && m_hNvml) {
+        auto shutdown = (pfnNvmlShutdown)GetProcAddress(m_hNvml, "nvmlShutdown");
+        if (shutdown) shutdown();
+        FreeLibrary(m_hNvml);
+    }
     CleanupWmi();
 }
 
@@ -42,11 +56,22 @@ bool GpuMonitor::Initialize() {
 
     PdhCollectQueryData(m_hQuery);
     InitWmi();
+    
+    // First try NVML
+    if (InitNvml()) {
+        m_gpuName = GetGpuNameNvml();
+    } else {
+        // Fallback: Show "Unsupported GPU" or at least the name from WMI
+        m_gpuName = GetGpuNameWmi();
+        if (m_gpuName.empty()) m_gpuName = L"Unsupported GPU";
+    }
+
     return true;
 }
 
 SystemStats GpuMonitor::Update() {
     SystemStats stats = { 0 };
+    stats.gpuName = m_gpuName;
 
     if (m_hQuery) {
         if (PdhCollectQueryData(m_hQuery) == ERROR_SUCCESS) {
@@ -134,7 +159,12 @@ SystemStats GpuMonitor::Update() {
     stats.cpuUsage = std::clamp(stats.cpuUsage, 0.0f, 100.0f);
     stats.gpuUsage = std::clamp(stats.gpuUsage, 0.0f, 100.0f);
     stats.cpuTemp = GetCpuTempWmi();
-    stats.gpuTemp = GetGpuTempWmi();
+    
+    if (m_nvmlInitialized) {
+        stats.gpuTemp = GetGpuTempNvml();
+    } else {
+        stats.gpuTemp = GetGpuTempWmi();
+    }
 
     return stats;
 }
@@ -186,21 +216,51 @@ float GpuMonitor::GetGpuMemoryUsageDxgi() {
     return 0.0f;
 }
 
+bool GpuMonitor::InitNvml() {
+    m_hNvml = LoadLibraryA("nvml.dll");
+    if (!m_hNvml) return false;
+
+    auto init = (pfnNvmlInit)GetProcAddress(m_hNvml, "nvmlInit");
+    if (!init || init() != NVML_SUCCESS) return false;
+
+    auto getHandle = (pfnNvmlDeviceGetHandleByIndex)GetProcAddress(m_hNvml, "nvmlDeviceGetHandleByIndex");
+    if (!getHandle || getHandle(0, (nvmlDevice_t*)&m_nvmlDevice) != NVML_SUCCESS) return false;
+
+    m_nvmlInitialized = true;
+    return true;
+}
+
+float GpuMonitor::GetGpuTempNvml() {
+    if (!m_nvmlInitialized) return 0.0f;
+    unsigned int temp = 0;
+    auto getTemp = (pfnNvmlDeviceGetTemperature)GetProcAddress(m_hNvml, "nvmlDeviceGetTemperature");
+    if (getTemp && getTemp((nvmlDevice_t)m_nvmlDevice, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS) {
+        return (float)temp;
+    }
+    return 0.0f;
+}
+
+std::wstring GpuMonitor::GetGpuNameNvml() {
+    if (!m_nvmlInitialized) return L"";
+    char name[64];
+    auto getName = (pfnNvmlDeviceGetName)GetProcAddress(m_hNvml, "nvmlDeviceGetName");
+    if (getName && getName((nvmlDevice_t)m_nvmlDevice, name, 64) == NVML_SUCCESS) {
+        std::string s(name);
+        return std::wstring(s.begin(), s.end());
+    }
+    return L"";
+}
+
 bool GpuMonitor::InitWmi() {
     HRESULT hr = CoInitializeEx(0, COINIT_MULTITHREADED);
     if (FAILED(hr)) return false;
     hr = CoInitializeSecurity(NULL, -1, NULL, NULL, RPC_C_AUTHN_LEVEL_DEFAULT, RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE, NULL);
     if (FAILED(hr) && hr != RPC_E_TOO_LATE) return false;
-    IWbemLocator* pLoc = NULL;
-    hr = CoCreateInstance(CLSID_WbemLocator, 0, CLSCTX_INPROC_SERVER, IID_IWbemLocator, (LPVOID*)&pLoc);
-    if (FAILED(hr)) return false;
-    pLoc->Release();
     m_wmiInitialized = true;
     return true;
 }
 
 void GpuMonitor::CleanupWmi() {
-    if (m_hQuery) PdhCloseQuery(m_hQuery);
     if (m_wmiInitialized) CoUninitialize();
 }
 
@@ -214,7 +274,6 @@ float GpuMonitor::GetCpuTempWmi() {
     if (SUCCEEDED(hr)) {
         if (SUCCEEDED(pLoc->ConnectServer(_bstr_t(L"ROOT\\CIMV2"), NULL, NULL, 0, NULL, 0, 0, &pSvc))) {
             IEnumWbemClassObject* pEnumerator = NULL;
-            // Trying CIMV2 first for broader support (some CPUs report here) then WMI
             hr = pSvc->ExecQuery(_bstr_t("WQL"), _bstr_t("SELECT CurrentTemperature FROM Win32_TemperatureProbe"), 0, NULL, &pEnumerator);
             if (SUCCEEDED(hr)) {
                 IWbemClassObject* pclsObj = NULL;
@@ -232,7 +291,6 @@ float GpuMonitor::GetCpuTempWmi() {
             pSvc->Release();
         }
         if (temp == 45.0f) {
-            // Try ROOT\WMI as fallback
             if (SUCCEEDED(pLoc->ConnectServer(_bstr_t(L"ROOT\\WMI"), NULL, NULL, 0, NULL, 0, 0, &pSvc))) {
                 IEnumWbemClassObject* pEnumerator = NULL;
                 hr = pSvc->ExecQuery(_bstr_t("WQL"), _bstr_t("SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature"), 0, NULL, &pEnumerator);
@@ -257,4 +315,41 @@ float GpuMonitor::GetCpuTempWmi() {
     return temp;
 }
 
-float GpuMonitor::GetGpuTempWmi() { return 42.0f; }
+float GpuMonitor::GetGpuTempWmi() { 
+    // Usually Win32_VideoController doesn't provide temperature, but we check if anything else might
+    return 0.0f; 
+}
+
+std::wstring GpuMonitor::GetGpuNameWmi() {
+    std::wstring name = L"";
+    if (!m_wmiInitialized) return name;
+
+    IWbemLocator* pLoc = NULL;
+    IWbemServices* pSvc = NULL;
+    HRESULT hr = CoCreateInstance(CLSID_WbemLocator, 0, CLSCTX_INPROC_SERVER, IID_IWbemLocator, (LPVOID*)&pLoc);
+    if (SUCCEEDED(hr)) {
+        if (SUCCEEDED(pLoc->ConnectServer(_bstr_t(L"ROOT\\CIMV2"), NULL, NULL, 0, NULL, 0, 0, &pSvc))) {
+            IEnumWbemClassObject* pEnumerator = NULL;
+            hr = pSvc->ExecQuery(_bstr_t("WQL"), _bstr_t("SELECT Name FROM Win32_VideoController"), 0, NULL, &pEnumerator);
+            if (SUCCEEDED(hr)) {
+                IWbemClassObject* pclsObj = NULL;
+                ULONG uReturn = 0;
+                while (SUCCEEDED(pEnumerator->Next(WBEM_INFINITE, 1, &pclsObj, &uReturn)) && uReturn > 0) {
+                    VARIANT vtProp;
+                    if (SUCCEEDED(pclsObj->Get(L"Name", 0, &vtProp, 0, 0))) {
+                        if (vtProp.vt == VT_BSTR) {
+                            if (name.length() > 0) name += L" + ";
+                            name += vtProp.bstrVal;
+                        }
+                        VariantClear(&vtProp);
+                    }
+                    pclsObj->Release();
+                }
+                pEnumerator->Release();
+            }
+            pSvc->Release();
+        }
+        pLoc->Release();
+    }
+    return name;
+}

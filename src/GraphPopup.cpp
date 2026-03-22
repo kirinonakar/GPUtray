@@ -108,13 +108,17 @@ void GraphPopup::OnPaint(HWND hWnd) {
     std::wstring ramExtra = formatMem(m_lastStats.ramUsed, m_lastStats.ramTotal);
     DrawGraphItem(g, L"Memory Usage", m_history.memoryUsage, y, Color(255, 100, 255, 100), m_lastStats.memoryUsage, L"%", ramExtra);
     
-    DrawGraphItem(g, L"GPU Usage", m_history.gpuUsage, y, Color(255, 200, 200, 100), m_lastStats.gpuUsage, L"%");
+    DrawGraphItem(g, L"GPU Usage (" + m_lastStats.gpuName + L")", m_history.gpuUsage, y, Color(255, 200, 200, 100), m_lastStats.gpuUsage, L"%");
     
     std::wstring gpuExtra = formatMem(m_lastStats.gpuMemUsed, m_lastStats.gpuMemTotal) + 
                              formatMem(m_lastStats.gpuSharedUsed, m_lastStats.gpuSharedTotal);
     DrawGraphItem(g, L"GPU Memory", m_history.gpuMemoryUsage, y, Color(255, 200, 100, 255), m_lastStats.gpuMemoryUsage, L"%", gpuExtra);
     
-    DrawGraphItem(g, L"GPU Temp", m_history.gpuTemp, y, Color(255, 255, 200, 100), m_lastStats.gpuTemp, L"C");
+    std::wstring tempLabel = L"GPU Temp";
+    if (m_lastStats.gpuTemp <= 0) {
+        tempLabel += L" (N/A)";
+    }
+    DrawGraphItem(g, tempLabel, m_history.gpuTemp, y, Color(255, 255, 200, 100), m_lastStats.gpuTemp, L"C");
 
     // Exit Button (centered at bottom, much larger)
     const int btnHeight = 50;
