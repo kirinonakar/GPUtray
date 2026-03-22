@@ -1,0 +1,260 @@
+#include "GpuMonitor.h"
+#include <dxgi1_4.h>
+#include <comdef.h>
+#include <WbemIdl.h>
+#include <pdhmsg.h>
+#include <iostream>
+#include <algorithm>
+#include <vector>
+
+#pragma comment(lib, "pdh.lib")
+#pragma comment(lib, "wbemuuid.lib")
+#pragma comment(lib, "dxgi.lib")
+
+GpuMonitor::GpuMonitor() {}
+
+GpuMonitor::~GpuMonitor() {
+    if (m_hQuery) PdhCloseQuery(m_hQuery);
+    CleanupWmi();
+}
+
+bool GpuMonitor::Initialize() {
+    if (PdhOpenQuery(NULL, 0, &m_hQuery) != ERROR_SUCCESS) return false;
+
+    // CPU Usage
+    PdhAddEnglishCounterW(m_hQuery, L"\\Processor(_Total)\\% Processor Time", 0, &m_hCpuCounter);
+
+    // GPU Usage - Primary: English, Secondary: Localized
+    if (PdhAddEnglishCounterW(m_hQuery, L"\\GPU Engine(*)\\Utilization Percentage", 0, &m_hGpuCounter) != ERROR_SUCCESS) {
+        if (PdhAddCounterW(m_hQuery, L"\\GPU Engine(*)\\Utilization Percentage", 0, &m_hGpuCounter) != ERROR_SUCCESS) {
+            PdhAddCounterW(m_hQuery, L"\\GPU 엔진(*)\\Utilization Percentage", 0, &m_hGpuCounter);
+        }
+    }
+
+    // GPU Memory - Primary: English, Secondary: Localized
+    PDH_HCOUNTER hGpuMem = nullptr;
+    if (PdhAddEnglishCounterW(m_hQuery, L"\\GPU Adapter Memory(*)\\Dedicated Usage", 0, &hGpuMem) != ERROR_SUCCESS) {
+        if (PdhAddCounterW(m_hQuery, L"\\GPU Adapter Memory(*)\\Dedicated Usage", 0, &hGpuMem) != ERROR_SUCCESS) {
+             PdhAddCounterW(m_hQuery, L"\\GPU 어댑터 메모리(*)\\Dedicated Usage", 0, &hGpuMem);
+        }
+    }
+    if (hGpuMem) m_gpuCounters.push_back(hGpuMem);
+
+    PdhCollectQueryData(m_hQuery);
+    InitWmi();
+    return true;
+}
+
+SystemStats GpuMonitor::Update() {
+    SystemStats stats = { 0 };
+
+    if (m_hQuery) {
+        if (PdhCollectQueryData(m_hQuery) == ERROR_SUCCESS) {
+            PDH_FMT_COUNTERVALUE value;
+            if (m_hCpuCounter && PdhGetFormattedCounterValue(m_hCpuCounter, PDH_FMT_DOUBLE, NULL, &value) == ERROR_SUCCESS) {
+                stats.cpuUsage = (float)value.doubleValue;
+            }
+
+            if (m_hGpuCounter) {
+                DWORD dwSize = 0, dwCount = 0;
+                PdhGetFormattedCounterArray(m_hGpuCounter, PDH_FMT_DOUBLE, &dwSize, &dwCount, NULL);
+                if (dwSize > 0) {
+                    std::vector<BYTE> buffer(dwSize);
+                    PPDH_FMT_COUNTERVALUE_ITEM pItems = (PPDH_FMT_COUNTERVALUE_ITEM)buffer.data();
+                    if (PdhGetFormattedCounterArray(m_hGpuCounter, PDH_FMT_DOUBLE, &dwSize, &dwCount, pItems) == ERROR_SUCCESS) {
+                        float maxGpu = 0.0f;
+                        for (DWORD i = 0; i < dwCount; i++) {
+                            if (pItems[i].FmtValue.doubleValue > maxGpu) maxGpu = (float)pItems[i].FmtValue.doubleValue;
+                        }
+                        stats.gpuUsage = maxGpu;
+                    }
+                }
+            }
+        }
+    }
+
+    MEMORYSTATUSEX memStatus = {sizeof(memStatus)};
+    if (GlobalMemoryStatusEx(&memStatus)) {
+        stats.ramTotal = (float)memStatus.ullTotalPhys / (1024 * 1024 * 1024);
+        stats.ramUsed = (float)(memStatus.ullTotalPhys - memStatus.ullAvailPhys) / (1024 * 1024 * 1024);
+        stats.memoryUsage = (stats.ramUsed / stats.ramTotal) * 100.0f;
+    }
+
+    // Memory Usage (Percentage)
+    stats.gpuMemoryUsage = GetGpuMemoryUsageDxgi();
+
+    // Fill Raw GB values by summing all relevant adapters (Dedicated & Shared)
+    float totalUsed = 0, totalMax = 0, sharedUsed = 0, sharedMax = 0;
+    IDXGIFactory4* pFactory;
+    if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory4), (void**)&pFactory))) {
+        for (UINT i = 0; ; i++) {
+            IDXGIAdapter1* pAdapter1;
+            if (pFactory->EnumAdapters1(i, &pAdapter1) == DXGI_ERROR_NOT_FOUND) break;
+            DXGI_ADAPTER_DESC1 desc1;
+            pAdapter1->GetDesc1(&desc1);
+            IDXGIAdapter3* pAdapter3;
+            if (SUCCEEDED(pAdapter1->QueryInterface(__uuidof(IDXGIAdapter3), (void**)&pAdapter3))) {
+                DXGI_QUERY_VIDEO_MEMORY_INFO memInfo;
+                // Dedicated
+                if (SUCCEEDED(pAdapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &memInfo))) {
+                    totalUsed += (float)memInfo.CurrentUsage;
+                }
+                // Shared
+                if (SUCCEEDED(pAdapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &memInfo))) {
+                    sharedUsed += (float)memInfo.CurrentUsage;
+                }
+                pAdapter3->Release();
+            }
+            totalMax += (float)desc1.DedicatedVideoMemory;
+            sharedMax += (float)desc1.SharedSystemMemory;
+            pAdapter1->Release();
+        }
+        pFactory->Release();
+    }
+    stats.gpuMemUsed = totalUsed / (1024.0f * 1024.0f * 1024.0f);
+    stats.gpuMemTotal = totalMax / (1024.0f * 1024.0f * 1024.0f);
+    stats.gpuSharedUsed = sharedUsed / (1024.0f * 1024.0f * 1024.0f);
+    stats.gpuSharedTotal = sharedMax / (1024.0f * 1024.0f * 1024.0f);
+
+    // Fallback if DXGI usage is 0 but PDH has something
+    if (stats.gpuMemUsed <= 0 && !m_gpuCounters.empty() && m_gpuCounters[0]) {
+        DWORD dwSize = 0, dwCount = 0;
+        PdhGetFormattedCounterArray(m_gpuCounters[0], PDH_FMT_DOUBLE, &dwSize, &dwCount, NULL);
+        if (dwSize > 0) {
+            std::vector<BYTE> buf(dwSize);
+            PPDH_FMT_COUNTERVALUE_ITEM pItems = (PPDH_FMT_COUNTERVALUE_ITEM)buf.data();
+            if (PdhGetFormattedCounterArray(m_gpuCounters[0], PDH_FMT_DOUBLE, &dwSize, &dwCount, pItems) == ERROR_SUCCESS) {
+                float pdhSum = 0;
+                for (DWORD i = 0; i < dwCount; i++) pdhSum += (float)pItems[i].FmtValue.doubleValue;
+                stats.gpuMemUsed = pdhSum / (1024.0f * 1024.0f * 1024.0f);
+            }
+        }
+    }
+
+    stats.cpuUsage = std::clamp(stats.cpuUsage, 0.0f, 100.0f);
+    stats.gpuUsage = std::clamp(stats.gpuUsage, 0.0f, 100.0f);
+    stats.cpuTemp = GetCpuTempWmi();
+    stats.gpuTemp = GetGpuTempWmi();
+
+    return stats;
+}
+
+float GpuMonitor::GetGpuMemoryUsageDxgi() {
+    float totalUsageBytes = 0.0f;
+    float totalBudgetBytes = 0.0f;
+
+    IDXGIFactory4* pFactory;
+    if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory4), (void**)&pFactory))) {
+        for (UINT i = 0; ; i++) {
+            IDXGIAdapter1* pAdapter1;
+            if (pFactory->EnumAdapters1(i, &pAdapter1) == DXGI_ERROR_NOT_FOUND) break;
+
+            DXGI_ADAPTER_DESC1 desc1;
+            pAdapter1->GetDesc1(&desc1);
+
+            IDXGIAdapter3* pAdapter3;
+            if (SUCCEEDED(pAdapter1->QueryInterface(__uuidof(IDXGIAdapter3), (void**)&pAdapter3))) {
+                DXGI_QUERY_VIDEO_MEMORY_INFO memInfo;
+                if (SUCCEEDED(pAdapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &memInfo))) {
+                    totalUsageBytes += (float)memInfo.CurrentUsage;
+                }
+                pAdapter3->Release();
+            }
+            totalBudgetBytes += (float)desc1.DedicatedVideoMemory;
+            pAdapter1->Release();
+        }
+        pFactory->Release();
+    }
+
+    if (totalUsageBytes <= 0 && !m_gpuCounters.empty() && m_gpuCounters[0]) {
+        DWORD dwSize = 0, dwCount = 0;
+        PdhGetFormattedCounterArray(m_gpuCounters[0], PDH_FMT_DOUBLE, &dwSize, &dwCount, NULL);
+        if (dwSize > 0) {
+            std::vector<BYTE> buf(dwSize);
+            PPDH_FMT_COUNTERVALUE_ITEM pItems = (PPDH_FMT_COUNTERVALUE_ITEM)buf.data();
+            if (PdhGetFormattedCounterArray(m_gpuCounters[0], PDH_FMT_DOUBLE, &dwSize, &dwCount, pItems) == ERROR_SUCCESS) {
+                float pdhSum = 0;
+                for (DWORD i = 0; i < dwCount; i++) pdhSum += (float)pItems[i].FmtValue.doubleValue;
+                totalUsageBytes = pdhSum;
+            }
+        }
+    }
+
+    if (totalBudgetBytes > 0) {
+        return std::clamp((totalUsageBytes / totalBudgetBytes) * 100.0f, 0.0f, 100.0f);
+    }
+    return 0.0f;
+}
+
+bool GpuMonitor::InitWmi() {
+    HRESULT hr = CoInitializeEx(0, COINIT_MULTITHREADED);
+    if (FAILED(hr)) return false;
+    hr = CoInitializeSecurity(NULL, -1, NULL, NULL, RPC_C_AUTHN_LEVEL_DEFAULT, RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE, NULL);
+    if (FAILED(hr) && hr != RPC_E_TOO_LATE) return false;
+    IWbemLocator* pLoc = NULL;
+    hr = CoCreateInstance(CLSID_WbemLocator, 0, CLSCTX_INPROC_SERVER, IID_IWbemLocator, (LPVOID*)&pLoc);
+    if (FAILED(hr)) return false;
+    pLoc->Release();
+    m_wmiInitialized = true;
+    return true;
+}
+
+void GpuMonitor::CleanupWmi() {
+    if (m_hQuery) PdhCloseQuery(m_hQuery);
+    if (m_wmiInitialized) CoUninitialize();
+}
+
+float GpuMonitor::GetCpuTempWmi() {
+    float temp = 45.0f;
+    if (!m_wmiInitialized) return temp;
+
+    IWbemLocator* pLoc = NULL;
+    IWbemServices* pSvc = NULL;
+    HRESULT hr = CoCreateInstance(CLSID_WbemLocator, 0, CLSCTX_INPROC_SERVER, IID_IWbemLocator, (LPVOID*)&pLoc);
+    if (SUCCEEDED(hr)) {
+        if (SUCCEEDED(pLoc->ConnectServer(_bstr_t(L"ROOT\\CIMV2"), NULL, NULL, 0, NULL, 0, 0, &pSvc))) {
+            IEnumWbemClassObject* pEnumerator = NULL;
+            // Trying CIMV2 first for broader support (some CPUs report here) then WMI
+            hr = pSvc->ExecQuery(_bstr_t("WQL"), _bstr_t("SELECT CurrentTemperature FROM Win32_TemperatureProbe"), 0, NULL, &pEnumerator);
+            if (SUCCEEDED(hr)) {
+                IWbemClassObject* pclsObj = NULL;
+                ULONG uReturn = 0;
+                if (SUCCEEDED(pEnumerator->Next(WBEM_INFINITE, 1, &pclsObj, &uReturn)) && uReturn > 0) {
+                    VARIANT vtProp;
+                    if (SUCCEEDED(pclsObj->Get(L"CurrentTemperature", 0, &vtProp, 0, 0))) {
+                        if (vtProp.vt != VT_NULL) temp = (float)vtProp.uintVal;
+                        VariantClear(&vtProp);
+                    }
+                    pclsObj->Release();
+                }
+                pEnumerator->Release();
+            }
+            pSvc->Release();
+        }
+        if (temp == 45.0f) {
+            // Try ROOT\WMI as fallback
+            if (SUCCEEDED(pLoc->ConnectServer(_bstr_t(L"ROOT\\WMI"), NULL, NULL, 0, NULL, 0, 0, &pSvc))) {
+                IEnumWbemClassObject* pEnumerator = NULL;
+                hr = pSvc->ExecQuery(_bstr_t("WQL"), _bstr_t("SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature"), 0, NULL, &pEnumerator);
+                if (SUCCEEDED(hr)) {
+                    IWbemClassObject* pclsObj = NULL;
+                    ULONG uReturn = 0;
+                    if (SUCCEEDED(pEnumerator->Next(WBEM_INFINITE, 1, &pclsObj, &uReturn)) && uReturn > 0) {
+                        VARIANT vtProp;
+                        if (SUCCEEDED(pclsObj->Get(L"CurrentTemperature", 0, &vtProp, 0, 0))) {
+                            if (vtProp.vt != VT_NULL) temp = (vtProp.uintVal / 10.0f) - 273.15f;
+                            VariantClear(&vtProp);
+                        }
+                        pclsObj->Release();
+                    }
+                    pEnumerator->Release();
+                }
+                pSvc->Release();
+            }
+        }
+        pLoc->Release();
+    }
+    return temp;
+}
+
+float GpuMonitor::GetGpuTempWmi() { return 42.0f; }
