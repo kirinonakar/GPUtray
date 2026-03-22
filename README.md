@@ -37,6 +37,11 @@ The application uses a multi-layered approach to ensure accurate temperature rea
 1. **Multi-source WMI**: Queries multiple namespaces (`ROOT\WMI`, `ROOT\CIMV2`) and classes (e.g., `MSAcpi_ThermalZoneTemperature`, `ThermalZoneInformation`) to find active sensors.
 2. **Heuristic Fallback**: If system sensors are inaccessible due to permission restrictions or hardware limitations, a dynamic heuristic model (`40°C + load-based factor`) is used to provide a responsive and realistic temperature estimation based on CPU utilization.
 
+## 🚀 Getting Started
+
+### 📥 Download
+You can download the latest version from the [Releases Page](https://github.com/kirinonakar/GpuTray/releases).
+
 ## Building from Source
 
 ### Prerequisites
@@ -68,4 +73,5 @@ The application uses a multi-layered approach to ensure accurate temperature rea
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
