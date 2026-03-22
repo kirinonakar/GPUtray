@@ -61,24 +61,26 @@ void GraphPopup::Update(const SystemStats& stats) {
     }
 
     if (m_saveLog) {
-        bool isNew = !std::ifstream("gputray.csv").good();
         std::ofstream log("gputray.csv", std::ios::app);
         if (log.is_open()) {
-            if (isNew) {
-                log << "\xEF\xBB\xBFTime,CPU Usage(%),RAM Usage(%),GPU Name,GPU Usage(%),GPU Memory(%),GPU Temp(°C)" << std::endl;
+            // Check if file is empty to write header
+            log.seekp(0, std::ios::end);
+            if (log.tellp() == 0) {
+                log << "\xEF\xBB\xBF\"Timestamp\",CPU Usage(%),RAM Usage(%),GPU Name,GPU Usage(%),GPU Memory(%),GPU Temp(°C)" << std::endl;
             }
             
-            auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+            auto now = std::chrono::system_clock::now();
+            auto time_t_now = std::chrono::system_clock::to_time_t(now);
             struct tm timeinfo;
-            localtime_s(&timeinfo, &now);
+            localtime_s(&timeinfo, &time_t_now);
             wchar_t timeStr[64];
             wcsftime(timeStr, 64, L"%Y-%m-%d %H:%M:%S", &timeinfo);
             
             std::wstringstream ss;
-            ss << timeStr << L","
+            ss << L"\"" << timeStr << L"\","
                 << (int)stats.cpuUsage << L","
                 << (int)stats.memoryUsage << L","
-                << stats.gpuName << L","
+                << L"\"" << stats.gpuName << L"\","
                 << (int)stats.gpuUsage << L","
                 << (int)stats.gpuMemoryUsage << L","
                 << (int)stats.gpuTemp;
