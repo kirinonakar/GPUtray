@@ -2,6 +2,10 @@
 
 A lightweight Windows system tray application that monitors GPU performance and system resource usage with real-time dynamic graphs.
 
+![screenshot01](screenshot01.png) ![screenshot02](screenshot02.png)
+
+
+
 ## Features
 
 - **Dynamic Tray Icon**: 
