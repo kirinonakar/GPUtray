@@ -6,6 +6,7 @@
 #include "GpuMonitor.h"
 #include "TrayIcon.h"
 #include "GraphPopup.h"
+#include "resource.h"
 
 // Globals
 GpuMonitor* g_monitor = nullptr;
@@ -45,6 +46,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     WNDCLASSW wc = {};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
+    wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON));
     wc.lpszClassName = CLASS_NAME;
     RegisterClassW(&wc);
 

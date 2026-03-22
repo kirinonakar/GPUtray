@@ -72,7 +72,7 @@ LRESULT CALLBACK GraphPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPA
     case WM_LBUTTONDOWN:
     {
         int y = HIWORD(lParam);
-        if (y > 410) { // Exit button area
+        if (y > pThis->m_height - 70) { // Larger exit button area
             PostQuitMessage(0);
         }
         return 0;
@@ -116,14 +116,16 @@ void GraphPopup::OnPaint(HWND hWnd) {
     
     DrawGraphItem(g, L"GPU Temp", m_history.gpuTemp, y, Color(255, 255, 200, 100), m_lastStats.gpuTemp, L"C");
 
-    // Exit Button
+    // Exit Button (centered at bottom, much larger)
+    const int btnHeight = 50;
     SolidBrush brush(Color(255, 60, 60, 60));
-    g.FillRectangle(&brush, 10, 415, 280, 25);
-    Font font(L"Arial", 10);
+    g.FillRectangle(&brush, 10, m_height - btnHeight - 10, m_width - 20, btnHeight);
+    Font font(L"Arial", 12, FontStyleBold);
     SolidBrush whiteBrush(Color(255, 255, 255, 255));
     StringFormat format;
     format.SetAlignment(StringAlignmentCenter);
-    g.DrawString(L"Close App", -1, &font, RectF(10, 417, 280, 25), &format, &whiteBrush);
+    format.SetLineAlignment(StringAlignmentCenter);
+    g.DrawString(L"Close App", -1, &font, RectF(10, (REAL)m_height - btnHeight - 10, (REAL)m_width - 20, (REAL)btnHeight), &format, &whiteBrush);
 
     Graphics frontG(hdc);
     frontG.DrawImage(&memBitmap, 0, 0);
@@ -131,24 +133,26 @@ void GraphPopup::OnPaint(HWND hWnd) {
 }
 
 void GraphPopup::DrawGraphItem(Graphics& g, const std::wstring& label, const std::deque<float>& history, int& yPos, Color color, float currentVal, const std::wstring& unit, const std::wstring& extra) {
-    Font font(L"Arial", 9);
-    SolidBrush whiteBrush(Color(255, 220, 220, 220));
+    Font font(L"Arial", 10, FontStyleRegular);
+    SolidBrush whiteBrush(Color(255, 230, 230, 230));
     
     std::wstring info = label + L": " + std::to_wstring((int)currentVal) + unit + extra;
     g.DrawString(info.c_str(), -1, &font, PointF(10, (REAL)yPos), &whiteBrush);
     
-    yPos += 20;
+    yPos += 22;
     Pen borderPen(Color(100, 100, 100, 100));
-    g.DrawRectangle(&borderPen, 10, yPos, 280, 40);
+    const int graphHeight = 85;
+    const int graphWidth = m_width - 20;
+    g.DrawRectangle(&borderPen, 10, yPos, graphWidth, graphHeight);
 
     if (!history.empty()) {
         Pen linePen(color, 1.5f);
-        int x = 290;
+        int x = m_width - 10;
         float prevX = -1, prevY = -1;
         for (auto it = history.rbegin(); it != history.rend() && x >= 10; ++it) {
             float val = *it;
-            float h = std::clamp(val, 0.0f, 100.0f) * 38.0f / 100.0f;
-            float curY = yPos + 39 - h;
+            float h = std::clamp(val, 0.0f, 100.0f) * (float)(graphHeight - 2) / 100.0f;
+            float curY = yPos + (graphHeight - 1) - h;
             if (prevX != -1) {
                 g.DrawLine(&linePen, (REAL)x, (REAL)curY, (REAL)prevX, (REAL)prevY);
             }
@@ -157,5 +161,5 @@ void GraphPopup::DrawGraphItem(Graphics& g, const std::wstring& label, const std
             x -= 3;
         }
     }
-    yPos += 50;
+    yPos += graphHeight + 15;
 }

@@ -34,14 +34,18 @@ A lightweight Windows system tray application that monitors GPU and CPU performa
 
 ### Steps
 1. Clone the repository.
-2. Open the folder in Visual Studio or run CMake:
-   ```bash
-   mkdir build
-   cd build
-   cmake ..
-   cmake --build . --config Release
-   ```
-3. Run `GpuTray.exe` from the output directory.
+2. Build the project:
+   - **2-1. Manual Build**:
+     ```bash
+     mkdir build
+     cd build
+     cmake ..
+     cmake --build . --config Release
+     ```
+   - **2-2. Automated Build**: 
+     Simply run `build.bat` in the project root folder.
+     (Run `build.bat clean` to delete the old build directory and start from scratch.)
+3. Run `GpuTray.exe` from the `build/Release/` directory.
 
 ## Usage
 

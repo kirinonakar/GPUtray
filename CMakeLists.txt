@@ -10,6 +10,8 @@ set(SOURCES
     src/GpuMonitor.cpp
     src/TrayIcon.cpp
     src/GraphPopup.cpp
+    src/resources.rc
+    src/GpuTray.manifest
 )
 
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES})

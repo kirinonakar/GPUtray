@@ -38,6 +38,6 @@ private:
     SystemStats m_lastStats = { 0 };
 
     const int m_historyLimit = 100;
-    const int m_width = 300;
-    const int m_height = 450;
+    const int m_width = 600;
+    const int m_height = 850;
 };
