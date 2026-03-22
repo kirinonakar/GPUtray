@@ -103,7 +103,7 @@ void GraphPopup::OnPaint(HWND hWnd) {
 
     int y = 10;
     DrawGraphItem(g, L"CPU Usage", m_history.cpuUsage, y, Color(255, 100, 200, 255), m_lastStats.cpuUsage, L"%");
-    DrawGraphItem(g, L"CPU Temp", m_history.cpuTemp, y, Color(255, 255, 100, 100), m_lastStats.cpuTemp, L"C");
+    DrawGraphItem(g, L"CPU Temp", m_history.cpuTemp, y, Color(255, 255, 100, 100), m_lastStats.cpuTemp, L"\u00B0C");
     
     std::wstring ramExtra = formatMem(m_lastStats.ramUsed, m_lastStats.ramTotal);
     DrawGraphItem(g, L"Memory Usage", m_history.memoryUsage, y, Color(255, 100, 255, 100), m_lastStats.memoryUsage, L"%", ramExtra);
@@ -118,7 +118,7 @@ void GraphPopup::OnPaint(HWND hWnd) {
     if (m_lastStats.gpuTemp <= 0) {
         tempLabel += L" (N/A)";
     }
-    DrawGraphItem(g, tempLabel, m_history.gpuTemp, y, Color(255, 255, 200, 100), m_lastStats.gpuTemp, L"C");
+    DrawGraphItem(g, tempLabel, m_history.gpuTemp, y, Color(255, 255, 200, 100), m_lastStats.gpuTemp, L"\u00B0C");
 
     // Exit Button (centered at bottom, much larger)
     const int btnHeight = 50;

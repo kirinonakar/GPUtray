@@ -1,5 +1,5 @@
 #pragma once
-
+#define NOMINMAX
 #include <windows.h>
 #include <pdh.h>
 #include <string>
@@ -47,7 +47,7 @@ private:
     // WMI for Temperatures and Fallback
     bool InitWmi();
     void CleanupWmi();
-    float GetCpuTempWmi();
+    float GetCpuTempWmi(float cpuUsage);
     float GetGpuTempWmi();
     std::wstring GetGpuNameWmi();
 
