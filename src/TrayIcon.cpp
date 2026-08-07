@@ -57,6 +57,8 @@ HICON TrayIcon::CreateDynamicIcon(const SystemStats& stats) {
                 case Metric::GPU:      val = stats.gpuUsage; break;
                 case Metric::GPU_MEM:  val = stats.gpuMemoryUsage; break;
                 case Metric::GPU_TEMP: val = stats.gpuTemp; break;
+                case Metric::GPU_12V_CURRENT: val = std::clamp(stats.gpu12VMaxPinCurrent / 12.0f * 100.0f, 0.0f, 100.0f); break;
+                default: break;
             }
             DrawGraph(g, val, y, barHeight, GetColorForUsage(val));
             y += barHeight;

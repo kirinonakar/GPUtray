@@ -5,7 +5,15 @@
 #include <string>
 #include <vector>
 
-enum class Metric { CPU, RAM, GPU, GPU_MEM, GPU_TEMP, COUNT };
+enum class Metric { CPU, RAM, GPU, GPU_MEM, GPU_TEMP, GPU_12V_CURRENT, COUNT };
+
+enum class PowerLimitSetResult {
+    Success,
+    RequiresElevation,
+    NotSupported,
+    InvalidValue,
+    Failed
+};
 
 
 struct SystemStats {
@@ -20,7 +28,23 @@ struct SystemStats {
     float gpuSharedUsed;  // GB
     float gpuSharedTotal; // GB
     float gpuTemp;
+    float gpu12VPinCurrent[6]; // A, ASUS ROG Astral only
+    float gpu12VPinVoltage[6]; // V, ASUS ROG Astral only
+    float gpu12VMaxPinCurrent;
+    bool gpu12VSupported;
+    float gpuPowerLimit;        // W
+    float gpuPowerLimitMin;     // W
+    float gpuPowerLimitMax;     // W
+    float gpuPowerLimitDefault; // W
+    int gpuPowerLimitPercent;   // Percentage of the BIOS default TDP (70-100%)
+    bool gpuPowerLimitSupported;
     std::wstring gpuName;
+};
+
+struct GpuProcessInfo {
+    DWORD processId;
+    float gpuUsage;
+    std::wstring name;
 };
 
 class GpuMonitor {
@@ -30,6 +54,8 @@ public:
 
     bool Initialize();
     SystemStats Update();
+    PowerLimitSetResult SetPowerLimitPercent(int percent);
+    std::vector<GpuProcessInfo> GetGpuProcessesAbove(float thresholdPercent);
 
 private:
     // PDH for CPU/GPU Usage
@@ -46,6 +72,15 @@ private:
     bool InitNvml();
     float GetGpuTempNvml();
     std::wstring GetGpuNameNvml();
+    void GetPowerLimitInfo(SystemStats& stats);
+
+    // NVAPI for ASUS Astral per-pin current sensors.
+    HMODULE m_hNvApi = nullptr;
+    bool m_nvApiInitialized = false;
+    void* m_nvApiGpu = nullptr;
+    bool m_isAstral = false;
+    bool InitNvApi();
+    bool ReadAstral12VPinSensors(float currents[6], float voltages[6]);
 
     // WMI for Temperatures and Fallback
     bool InitWmi();

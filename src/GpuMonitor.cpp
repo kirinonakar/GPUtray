@@ -5,13 +5,24 @@
 #include <pdhmsg.h>
 #include <iostream>
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstring>
+#include <cwchar>
+#include <unordered_map>
 #include <vector>
 
 #pragma comment(lib, "pdh.lib")
 #pragma comment(lib, "wbemuuid.lib")
 #pragma comment(lib, "dxgi.lib")
 
-typedef enum nvmlReturn_enum { NVML_SUCCESS = 0 } nvmlReturn_t;
+typedef enum nvmlReturn_enum {
+    NVML_SUCCESS = 0,
+    NVML_ERROR_INVALID_ARGUMENT = 2,
+    NVML_ERROR_NOT_SUPPORTED = 3,
+    NVML_ERROR_NO_PERMISSION = 4
+} nvmlReturn_t;
 typedef struct nvmlDevice_st* nvmlDevice_t;
 typedef enum nvmlTemperatureSensors_enum { NVML_TEMPERATURE_GPU = 0 } nvmlTemperatureSensors_t;
 typedef nvmlReturn_t (*pfnNvmlInit)(void);
@@ -19,6 +30,54 @@ typedef nvmlReturn_t (*pfnNvmlShutdown)(void);
 typedef nvmlReturn_t (*pfnNvmlDeviceGetHandleByIndex)(unsigned int, nvmlDevice_t*);
 typedef nvmlReturn_t (*pfnNvmlDeviceGetTemperature)(nvmlDevice_t, nvmlTemperatureSensors_t, unsigned int*);
 typedef nvmlReturn_t (*pfnNvmlDeviceGetName)(nvmlDevice_t, char*, unsigned int);
+typedef nvmlReturn_t (*pfnNvmlDeviceGetPowerManagementLimit)(nvmlDevice_t, unsigned int*);
+typedef nvmlReturn_t (*pfnNvmlDeviceGetPowerManagementLimitConstraints)(nvmlDevice_t, unsigned int*, unsigned int*);
+typedef nvmlReturn_t (*pfnNvmlDeviceGetPowerManagementDefaultLimit)(nvmlDevice_t, unsigned int*);
+typedef nvmlReturn_t (*pfnNvmlDeviceSetPowerManagementLimit)(nvmlDevice_t, unsigned int);
+
+using NvApiStatus = int;
+using NvPhysicalGpuHandle = void*;
+using pfnNvApiQueryInterface = void* (__cdecl*)(unsigned int);
+using pfnNvApiInitialize = NvApiStatus (__cdecl*)();
+using pfnNvApiUnload = NvApiStatus (__cdecl*)();
+using pfnNvApiEnumPhysicalGpus = NvApiStatus (__cdecl*)(NvPhysicalGpuHandle*, unsigned int*);
+using pfnNvApiGetPciIdentifiers = NvApiStatus (__cdecl*)(NvPhysicalGpuHandle, unsigned int*, unsigned int*, unsigned int*, unsigned int*);
+
+constexpr NvApiStatus NVAPI_OK = 0;
+constexpr unsigned int NVAPI_INITIALIZE = 0x0150E828;
+constexpr unsigned int NVAPI_UNLOAD = 0xD22BDD7E;
+constexpr unsigned int NVAPI_ENUM_PHYSICAL_GPUS = 0xE5AC921F;
+constexpr unsigned int NVAPI_GPU_GET_PCI_IDENTIFIERS = 0x2DDFB66E;
+constexpr unsigned int NVAPI_I2C_READ_EX = 0x4D7B0709;
+
+#pragma pack(push, 8)
+struct NvI2CInfoV3 {
+    unsigned int version;
+    unsigned int displayMask;
+    unsigned char isDdcPort;
+    unsigned char deviceAddress;
+    unsigned char padding0[6];
+    unsigned char* registerAddress;
+    unsigned int registerAddressSize;
+    unsigned char padding1[4];
+    unsigned char* data;
+    unsigned int dataSize;
+    unsigned int i2cSpeed;
+    unsigned int i2cSpeedKhz;
+    unsigned char portId;
+    unsigned char padding2[3];
+    unsigned int isPortIdSet;
+};
+#pragma pack(pop)
+
+using pfnNvApiI2CReadEx = NvApiStatus (__cdecl*)(NvPhysicalGpuHandle, NvI2CInfoV3*, unsigned int*);
+
+#ifdef _WIN64
+static_assert(sizeof(NvI2CInfoV3) == 64, "NVAPI I2C structure layout mismatch");
+static_assert(offsetof(NvI2CInfoV3, registerAddress) == 16, "NVAPI I2C register address offset mismatch");
+static_assert(offsetof(NvI2CInfoV3, data) == 32, "NVAPI I2C data offset mismatch");
+static_assert(offsetof(NvI2CInfoV3, isPortIdSet) == 56, "NVAPI I2C port flag offset mismatch");
+#endif
 
 // Helper function to increase code complexity and entropy
 static void PerformSanityCheck() {
@@ -37,6 +96,12 @@ GpuMonitor::~GpuMonitor() {
         if (shutdown) shutdown();
         FreeLibrary(m_hNvml);
     }
+    if (m_nvApiInitialized && m_hNvApi) {
+        auto query = (pfnNvApiQueryInterface)GetProcAddress(m_hNvApi, "nvapi_QueryInterface");
+        auto unload = query ? (pfnNvApiUnload)query(NVAPI_UNLOAD) : nullptr;
+        if (unload) unload();
+    }
+    if (m_hNvApi) FreeLibrary(m_hNvApi);
     CleanupWmi();
 }
 
@@ -81,6 +146,7 @@ bool GpuMonitor::Initialize() {
         m_gpuName = GetGpuNameWmi();
         if (m_gpuName.empty()) m_gpuName = L"Unsupported GPU";
     }
+    InitNvApi();
 
     return true;
 }
@@ -197,7 +263,78 @@ SystemStats GpuMonitor::Update() {
         stats.gpuTemp = GetGpuTempWmi();
     }
 
+    stats.gpu12VSupported = m_isAstral && ReadAstral12VPinSensors(stats.gpu12VPinCurrent, stats.gpu12VPinVoltage);
+    if (stats.gpu12VSupported) {
+        stats.gpu12VMaxPinCurrent = *std::max_element(std::begin(stats.gpu12VPinCurrent), std::end(stats.gpu12VPinCurrent));
+    }
+    GetPowerLimitInfo(stats);
+
     return stats;
+}
+
+void GpuMonitor::GetPowerLimitInfo(SystemStats& stats) {
+    if (!m_nvmlInitialized) return;
+    auto getLimit = (pfnNvmlDeviceGetPowerManagementLimit)GetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementLimit");
+    auto getConstraints = (pfnNvmlDeviceGetPowerManagementLimitConstraints)GetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementLimitConstraints");
+    auto getDefault = (pfnNvmlDeviceGetPowerManagementDefaultLimit)GetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementDefaultLimit");
+    if (!getLimit || !getConstraints || !getDefault) return;
+
+    unsigned int current = 0, minimum = 0, maximum = 0, defaultLimit = 0;
+    if (getLimit((nvmlDevice_t)m_nvmlDevice, &current) == NVML_SUCCESS &&
+        getConstraints((nvmlDevice_t)m_nvmlDevice, &minimum, &maximum) == NVML_SUCCESS &&
+        getDefault((nvmlDevice_t)m_nvmlDevice, &defaultLimit) == NVML_SUCCESS) {
+        stats.gpuPowerLimit = current / 1000.0f;
+        stats.gpuPowerLimitMin = minimum / 1000.0f;
+        stats.gpuPowerLimitMax = maximum / 1000.0f;
+        stats.gpuPowerLimitDefault = defaultLimit / 1000.0f;
+        stats.gpuPowerLimitSupported = maximum >= minimum && minimum > 0;
+        if (defaultLimit > 0) {
+            // Match Afterburner's percentage semantics: the BIOS default power
+            // limit is 100%, rather than remapping the BIOS minimum to the UI
+            // minimum.
+            float percent = (float)current * 100.0f / (float)defaultLimit;
+            stats.gpuPowerLimitPercent = (int)std::lround(std::clamp(percent, 70.0f, 100.0f));
+        } else {
+            stats.gpuPowerLimitPercent = 100;
+        }
+    }
+}
+
+PowerLimitSetResult GpuMonitor::SetPowerLimitPercent(int percent) {
+    if (!m_nvmlInitialized) return PowerLimitSetResult::NotSupported;
+    auto getConstraints = (pfnNvmlDeviceGetPowerManagementLimitConstraints)GetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementLimitConstraints");
+    auto setLimit = (pfnNvmlDeviceSetPowerManagementLimit)GetProcAddress(m_hNvml, "nvmlDeviceSetPowerManagementLimit");
+    if (!getConstraints || !setLimit) return PowerLimitSetResult::NotSupported;
+
+    unsigned int minimum = 0, maximum = 0;
+    if (getConstraints((nvmlDevice_t)m_nvmlDevice, &minimum, &maximum) != NVML_SUCCESS) {
+        return PowerLimitSetResult::NotSupported;
+    }
+    if (percent < 70 || percent > 100) return PowerLimitSetResult::InvalidValue;
+
+    auto getDefault = (pfnNvmlDeviceGetPowerManagementDefaultLimit)GetProcAddress(
+        m_hNvml, "nvmlDeviceGetPowerManagementDefaultLimit");
+    unsigned int defaultLimit = 0;
+    if (!getDefault ||
+        getDefault((nvmlDevice_t)m_nvmlDevice, &defaultLimit) != NVML_SUCCESS ||
+        defaultLimit == 0) {
+        return PowerLimitSetResult::NotSupported;
+    }
+
+    // NVML uses milliwatts. Calculating directly from the BIOS default makes,
+    // for example, 70% request the same wattage as Afterburner's 70% setting.
+    unsigned int requested = (unsigned int)std::lround(
+        (double)defaultLimit * (double)percent / 100.0);
+    if (requested < minimum || requested > maximum) {
+        return PowerLimitSetResult::InvalidValue;
+    }
+
+    nvmlReturn_t result = setLimit((nvmlDevice_t)m_nvmlDevice, requested);
+    if (result == NVML_SUCCESS) return PowerLimitSetResult::Success;
+    if (result == NVML_ERROR_NO_PERMISSION) return PowerLimitSetResult::RequiresElevation;
+    if (result == NVML_ERROR_NOT_SUPPORTED) return PowerLimitSetResult::NotSupported;
+    if (result == NVML_ERROR_INVALID_ARGUMENT) return PowerLimitSetResult::InvalidValue;
+    return PowerLimitSetResult::Failed;
 }
 
 float GpuMonitor::GetGpuMemoryUsageDxgi() {
@@ -270,6 +407,135 @@ bool GpuMonitor::InitNvml() {
 
     m_nvmlInitialized = true;
     return true;
+}
+
+bool GpuMonitor::InitNvApi() {
+#ifndef _WIN64
+    return false;
+#else
+    m_hNvApi = LoadLibraryExW(L"nvapi64.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!m_hNvApi) return false;
+
+    auto query = (pfnNvApiQueryInterface)GetProcAddress(m_hNvApi, "nvapi_QueryInterface");
+    if (!query) return false;
+    auto initialize = (pfnNvApiInitialize)query(NVAPI_INITIALIZE);
+    auto enumerate = (pfnNvApiEnumPhysicalGpus)query(NVAPI_ENUM_PHYSICAL_GPUS);
+    auto getPci = (pfnNvApiGetPciIdentifiers)query(NVAPI_GPU_GET_PCI_IDENTIFIERS);
+    if (!initialize || !enumerate || initialize() != NVAPI_OK) return false;
+    m_nvApiInitialized = true;
+
+    NvPhysicalGpuHandle handles[64] = {};
+    unsigned int count = 0;
+    if (enumerate(handles, &count) != NVAPI_OK || count == 0) return false;
+
+    m_nvApiGpu = handles[0];
+    constexpr unsigned int astralIds[] = {
+        0x89EA1043, 0x8A611043, 0x89EC1043, 0x89E31043, 0x89DE1043
+    };
+    if (getPci) {
+        for (unsigned int i = 0; i < count; ++i) {
+            unsigned int deviceId = 0, subsystemId = 0, revisionId = 0, extDeviceId = 0;
+            if (getPci(handles[i], &deviceId, &subsystemId, &revisionId, &extDeviceId) != NVAPI_OK) continue;
+            if (std::find(std::begin(astralIds), std::end(astralIds), subsystemId) != std::end(astralIds)) {
+                m_nvApiGpu = handles[i];
+                m_isAstral = true;
+                break;
+            }
+        }
+    }
+
+    return true;
+#endif
+}
+
+bool GpuMonitor::ReadAstral12VPinSensors(float currents[6], float voltages[6]) {
+#ifndef _WIN64
+    return false;
+#else
+    if (!m_nvApiInitialized || !m_isAstral || !m_nvApiGpu) return false;
+    auto query = (pfnNvApiQueryInterface)GetProcAddress(m_hNvApi, "nvapi_QueryInterface");
+    auto readI2c = query ? (pfnNvApiI2CReadEx)query(NVAPI_I2C_READ_EX) : nullptr;
+    if (!readI2c) return false;
+
+    unsigned char raw[24] = {};
+    unsigned char reg = 0x80;
+    NvI2CInfoV3 info = {};
+    info.version = (3u << 16) | (unsigned int)sizeof(NvI2CInfoV3);
+    info.deviceAddress = 0x2B << 1;
+    info.registerAddress = &reg;
+    info.registerAddressSize = 1;
+    info.data = raw;
+    info.dataSize = sizeof(raw);
+    info.i2cSpeed = 0xFFFF;
+    info.i2cSpeedKhz = 4; // 100 kHz
+    info.portId = 1;
+    info.isPortIdSet = 1;
+    unsigned int bytesRead = 0;
+    if (readI2c((NvPhysicalGpuHandle)m_nvApiGpu, &info, &bytesRead) != NVAPI_OK) return false;
+
+    auto readBe16 = [&](int offset) -> unsigned int {
+        return ((unsigned int)raw[offset] << 8) | raw[offset + 1];
+    };
+    for (int pin = 0; pin < 6; ++pin) {
+        int base = (5 - pin) * 4;
+        voltages[pin] = readBe16(base) * 0.001f;
+        currents[pin] = readBe16(base + 2) * 0.001f;
+        if (voltages[pin] < 0.0f || voltages[pin] > 16.0f || currents[pin] < 0.0f || currents[pin] > 30.0f) {
+            std::fill(currents, currents + 6, 0.0f);
+            std::fill(voltages, voltages + 6, 0.0f);
+            return false;
+        }
+    }
+    return true;
+#endif
+}
+
+std::vector<GpuProcessInfo> GpuMonitor::GetGpuProcessesAbove(float thresholdPercent) {
+    std::vector<GpuProcessInfo> result;
+    if (!m_hGpuCounter) return result;
+
+    DWORD size = 0, count = 0;
+    PdhGetFormattedCounterArray(m_hGpuCounter, PDH_FMT_DOUBLE, &size, &count, nullptr);
+    if (!size) return result;
+    std::vector<BYTE> buffer(size);
+    auto items = reinterpret_cast<PPDH_FMT_COUNTERVALUE_ITEM>(buffer.data());
+    if (PdhGetFormattedCounterArray(m_hGpuCounter, PDH_FMT_DOUBLE, &size, &count, items) != ERROR_SUCCESS) return result;
+
+    std::unordered_map<DWORD, float> usageByPid;
+    for (DWORD i = 0; i < count; ++i) {
+        const wchar_t* marker = wcsstr(items[i].szName, L"pid_");
+        if (!marker) continue;
+        wchar_t* end = nullptr;
+        unsigned long parsed = wcstoul(marker + 4, &end, 10);
+        if (!end || end == marker + 4 || parsed <= 4 || parsed == GetCurrentProcessId()) continue;
+        // Match Task Manager's GPU percentage semantics: a process is represented
+        // by its busiest GPU engine, not by summing independent engines (which
+        // could falsely exceed 50%).
+        float engineUsage = (float)items[i].FmtValue.doubleValue;
+        usageByPid[(DWORD)parsed] = (std::max)(usageByPid[(DWORD)parsed], engineUsage);
+    }
+
+    for (const auto& [pid, usage] : usageByPid) {
+        float clampedUsage = std::clamp(usage, 0.0f, 100.0f);
+        if (clampedUsage < thresholdPercent) continue;
+        std::wstring name = L"PID " + std::to_wstring(pid);
+        HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (process) {
+            wchar_t path[1024] = {};
+            DWORD pathSize = (DWORD)std::size(path);
+            if (QueryFullProcessImageNameW(process, 0, path, &pathSize)) {
+                std::wstring fullPath(path, pathSize);
+                size_t slash = fullPath.find_last_of(L"\\/");
+                name = slash == std::wstring::npos ? fullPath : fullPath.substr(slash + 1);
+            }
+            CloseHandle(process);
+        }
+        result.push_back({ pid, clampedUsage, name });
+    }
+    std::sort(result.begin(), result.end(), [](const GpuProcessInfo& a, const GpuProcessInfo& b) {
+        return a.gpuUsage > b.gpuUsage;
+    });
+    return result;
 }
 
 float GpuMonitor::GetGpuTempNvml() {

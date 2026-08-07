@@ -10,7 +10,7 @@ A lightweight Windows system tray application that monitors GPU performance and 
 
 - **Dynamic Tray Icon**: 
   - Real-time performance graphs directly in the taskbar.
-  - **Customizable**: Select up to 5 metrics (CPU, RAM, GPU, VRAM, GPU Temp) to display simultaneously.
+  - **Customizable**: Select up to 5 metrics (CPU, RAM, GPU, VRAM, GPU Temp, 12V-2x6 pin current) to display simultaneously.
   - Refresh rate: **1 FPS** (Once every second).
   - Dynamic Colors: Green (<50%), Yellow (<80%), Red (>=80%) based on usage levels.
 - **CSV Data Logging**:
@@ -23,6 +23,13 @@ A lightweight Windows system tray application that monitors GPU performance and 
     - **GPU**: Engine Utilization (%), Video Memory (%), Temperature (°C)
   - Dark-themed, sleek UI design.
   - One-click exit button.
+- **ASUS ROG Astral 12V-2x6 monitoring**:
+  - Reads all six pin currents directly from the on-board IT8915FN sensor through read-only NVAPI I2C access.
+  - Optional protection warns on a 0 A or >9.2 A pin and, after acknowledgement, terminates processes currently using at least 50% GPU.
+- **GPU power limit control**:
+  - Adjust from 70% to 100% of the card's BIOS default TDP in 1% steps, matching MSI Afterburner's percentage semantics.
+  - Stage changes with -5%, -1%, +1%, +5%, or 100%, then apply them explicitly with the Apply button.
+  - Uses NVML and requests administrator approval only when Apply is clicked and the driver requires it.
 
 ## Technologies Used
 
@@ -80,4 +87,3 @@ You can download the latest version from the [Releases Page](https://github.com/
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-

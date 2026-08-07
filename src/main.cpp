@@ -3,6 +3,7 @@
 #endif
 
 #include <windows.h>
+#include <cwchar>
 #include "GpuMonitor.h"
 #include "TrayIcon.h"
 #include "GraphPopup.h"
@@ -41,6 +42,25 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
+    const wchar_t* setLimitPrefix = L"--set-power-limit-percent ";
+    if (pCmdLine && wcsncmp(pCmdLine, setLimitPrefix, wcslen(setLimitPrefix)) == 0) {
+        int percent = (int)wcstol(pCmdLine + wcslen(setLimitPrefix), nullptr, 10);
+        GpuMonitor helper;
+        PowerLimitSetResult result = helper.Initialize()
+            ? helper.SetPowerLimitPercent(percent)
+            : PowerLimitSetResult::Failed;
+        const wchar_t* message = result == PowerLimitSetResult::Success
+            ? L"GPU power limit updated successfully."
+            : result == PowerLimitSetResult::InvalidValue
+                ? L"The requested percentage is outside the 70-100% range or below the GPU BIOS minimum."
+                : result == PowerLimitSetResult::NotSupported
+                    ? L"This GPU or driver does not support changing the power limit."
+                    : L"Failed to update the GPU power limit.";
+        MessageBoxW(nullptr, message, L"GPU Power Limit", MB_OK |
+                    (result == PowerLimitSetResult::Success ? MB_ICONINFORMATION : MB_ICONERROR));
+        return result == PowerLimitSetResult::Success ? 0 : 1;
+    }
+
     // Hidden window to handle messages
     const wchar_t CLASS_NAME[] = L"GpuTrayHiddenWindow";
     WNDCLASSW wc = {};

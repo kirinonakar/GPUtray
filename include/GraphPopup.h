@@ -21,21 +21,29 @@ public:
 
 private:
     void OnPaint(HWND hWnd);
-    void DrawGraphItem(Gdiplus::Graphics& g, Metric metric, const std::wstring& label, const std::deque<float>& history, int& yPos, Gdiplus::Color color, float currentVal, const std::wstring& unit, const std::wstring& extra = L"");
+    void DrawGraphItem(Gdiplus::Graphics& g, Metric metric, const std::wstring& label, const std::deque<float>& history, int& yPos, Gdiplus::Color color, float currentVal, const std::wstring& unit, const std::wstring& extra = L"", float graphMax = 100.0f, bool valueAvailable = true, bool showCurrentValue = true, bool showGraph = true, bool showCheckbox = true);
     void UpdateTrayMetrics();
+    void AdjustPowerLimit(int deltaPercent, bool useDefault = false);
+    void ApplyPowerLimit();
+    void CheckPinCurrentProtection(const SystemStats& stats);
 
     HWND m_hWnd;
     HWND m_hParent;
     GpuMonitor* m_monitor;
     TrayIcon* m_trayIcon;
 
-    bool m_selectedMetrics[(int)Metric::COUNT] = { false, false, true, true, false }; // Default: GPU, GPU_MEM
+    bool m_selectedMetrics[(int)Metric::COUNT] = { false, false, true, true, false, false }; // Default: GPU, GPU_MEM
     bool m_saveLog = false;
+    bool m_enablePinProtection = false;
+    bool m_pinFaultLatched = false;
+    int m_pendingPowerLimitPercent = -1;
+    bool m_powerLimitDirty = false;
     
     struct ClickArea {
         RECT rect;
         Metric metric;
         bool isLog;
+        int action;
     };
     std::vector<ClickArea> m_clickAreas;
 
@@ -45,11 +53,12 @@ private:
         std::deque<float> gpuUsage;
         std::deque<float> gpuMemoryUsage;
         std::deque<float> gpuTemp;
+        std::deque<float> gpu12VMaxPinCurrent;
     } m_history;
 
     SystemStats m_lastStats = { 0 };
 
     const int m_historyLimit = 100;
-    const int m_width = 650;
-    const int m_height = 750;
+    const int m_width = 950;
+    const int m_height = 800;
 };
