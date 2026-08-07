@@ -75,6 +75,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         return result == PowerLimitSetResult::Success ? 0 : 1;
     }
 
+    // Single instance guard: allow only one tray instance (helpers above may still run).
+    HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"Local\\GpuTraySingleInstance");
+    if (hMutex == nullptr || GetLastError() == ERROR_ALREADY_EXISTS) {
+        if (hMutex) CloseHandle(hMutex);
+        return 0;
+    }
+
     // Hidden window to handle messages
     const wchar_t CLASS_NAME[] = L"GpuTrayHiddenWindow";
     WNDCLASSW wc = {};
@@ -112,6 +119,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     delete g_graphPopup;
     delete g_trayIcon;
     delete g_monitor;
+    CloseHandle(hMutex);
 
     return 0;
 }
