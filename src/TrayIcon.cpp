@@ -71,11 +71,11 @@ HICON TrayIcon::CreateDynamicIcon(const SystemStats& stats) {
 }
 
 void TrayIcon::DrawGraph(Graphics& g, float value, int yOffset, int height, Color color) {
-    if (value <= 0.1f) return; // Completely black for 0 or near 0
-
     // Background bar for better contrast
     SolidBrush bgBrush(Color(255, 60, 60, 60));
     g.FillRectangle(&bgBrush, 0, yOffset, 16, height);
+
+    if (value <= 0.1f) return; // No colored fill for 0 or near 0
 
     int barWidth = (int)(std::clamp(value, 0.0f, 100.0f) * 16.0f / 100.0f);
     if (barWidth < 1 && value > 0.5f) barWidth = 1;
