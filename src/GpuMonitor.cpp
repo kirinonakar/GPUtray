@@ -72,6 +72,140 @@ struct NvI2CInfoV3 {
 
 using pfnNvApiI2CReadEx = NvApiStatus (__cdecl*)(NvPhysicalGpuHandle, NvI2CInfoV3*, unsigned int*);
 
+// ---------------------------------------------------------------------------
+// SEH-guarded wrappers for the dynamically loaded NVML/NVAPI entry points.
+//
+// A graphics driver installation replaces or unloads nvml.dll / nvapi64.dll
+// underneath this process, and NVAPI is known to fault while the display
+// driver restarts. Calling a stale function pointer can therefore raise an
+// access violation; these wrappers convert that into a clean failure so the
+// tray app never crashes. RefreshDriverHandles() then reloads the libraries
+// and re-runs initialization once the driver is back.
+// ---------------------------------------------------------------------------
+
+static FARPROC SafeGetProcAddress(HMODULE hModule, const char* procName) {
+    if (!hModule) return nullptr;
+    __try { return GetProcAddress(hModule, procName); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+
+static void SafeFreeLibrary(HMODULE hModule) {
+    if (!hModule) return;
+    __try { FreeLibrary(hModule); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+static bool SafeNvmlInit(pfnNvmlInit fn) {
+    __try { return fn() == NVML_SUCCESS; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static void SafeNvmlShutdown(pfnNvmlShutdown fn) {
+    __try { fn(); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+static bool SafeNvmlGetHandle(pfnNvmlDeviceGetHandleByIndex fn, unsigned int index, nvmlDevice_t* out) {
+    __try { return fn(index, out) == NVML_SUCCESS; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool SafeNvmlGetTemperature(pfnNvmlDeviceGetTemperature fn, nvmlDevice_t dev, unsigned int* out) {
+    __try { return fn(dev, NVML_TEMPERATURE_GPU, out) == NVML_SUCCESS; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool SafeNvmlGetName(pfnNvmlDeviceGetName fn, nvmlDevice_t dev, char* name, unsigned int length) {
+    __try { return fn(dev, name, length) == NVML_SUCCESS; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool SafeNvmlGetPowerLimits(pfnNvmlDeviceGetPowerManagementLimit getLimit,
+                                   pfnNvmlDeviceGetPowerManagementLimitConstraints getConstraints,
+                                   pfnNvmlDeviceGetPowerManagementDefaultLimit getDefault,
+                                   nvmlDevice_t dev,
+                                   unsigned int* current, unsigned int* minimum,
+                                   unsigned int* maximum, unsigned int* defaultLimit) {
+    __try {
+        if (getLimit(dev, current) != NVML_SUCCESS) return false;
+        if (getConstraints(dev, minimum, maximum) != NVML_SUCCESS) return false;
+        if (getDefault(dev, defaultLimit) != NVML_SUCCESS) return false;
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool SafeNvmlGetConstraints(pfnNvmlDeviceGetPowerManagementLimitConstraints fn,
+                                   nvmlDevice_t dev, unsigned int* minimum, unsigned int* maximum) {
+    __try { return fn(dev, minimum, maximum) == NVML_SUCCESS; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool SafeNvmlGetDefaultLimit(pfnNvmlDeviceGetPowerManagementDefaultLimit fn,
+                                    nvmlDevice_t dev, unsigned int* out) {
+    __try { return fn(dev, out) == NVML_SUCCESS; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool SafeNvmlSetPowerLimit(pfnNvmlDeviceSetPowerManagementLimit fn,
+                                  nvmlDevice_t dev, unsigned int value, nvmlReturn_t* outResult) {
+    __try { *outResult = fn(dev, value); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool SafeNvApiQueryFunction(HMODULE hNvApi, unsigned int id, void** outFn) {
+    if (!hNvApi) return false;
+    __try {
+        auto query = (pfnNvApiQueryInterface)GetProcAddress(hNvApi, "nvapi_QueryInterface");
+        if (!query) return false;
+        *outFn = query(id);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool SafeNvApiInitialize(pfnNvApiInitialize fn) {
+    __try { return fn() == NVAPI_OK; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool SafeNvApiEnumGpus(pfnNvApiEnumPhysicalGpus fn, NvPhysicalGpuHandle* handles, unsigned int* count) {
+    __try { return fn(handles, count) == NVAPI_OK; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool SafeNvApiGetPci(pfnNvApiGetPciIdentifiers fn, NvPhysicalGpuHandle handle,
+                            unsigned int* deviceId, unsigned int* subsystemId,
+                            unsigned int* revisionId, unsigned int* extDeviceId) {
+    __try { return fn(handle, deviceId, subsystemId, revisionId, extDeviceId) == NVAPI_OK; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool SafeNvApiUnload(pfnNvApiUnload fn) {
+    __try { fn(); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool SafeNvApiI2CRead(pfnNvApiI2CReadEx fn, NvPhysicalGpuHandle handle,
+                             NvI2CInfoV3* info, unsigned int* bytesRead) {
+    __try { return fn(handle, info, bytesRead) == NVAPI_OK; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+// Last-write time of a driver DLL in System32, used to detect driver installs.
+static bool GetDllLastWriteTime(const wchar_t* dllName, ULARGE_INTEGER* outTime) {
+    wchar_t path[MAX_PATH];
+    UINT len = GetSystemDirectoryW(path, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return false;
+    wcscat_s(path, L"\\");
+    wcscat_s(path, dllName);
+    WIN32_FILE_ATTRIBUTE_DATA data = {};
+    if (!GetFileAttributesExW(path, GetFileExInfoStandard, &data)) return false;
+    outTime->LowPart = data.ftLastWriteTime.dwLowDateTime;
+    outTime->HighPart = data.ftLastWriteTime.dwHighDateTime;
+    return true;
+}
+
 #ifdef _WIN64
 static_assert(sizeof(NvI2CInfoV3) == 64, "NVAPI I2C structure layout mismatch");
 static_assert(offsetof(NvI2CInfoV3, registerAddress) == 16, "NVAPI I2C register address offset mismatch");
@@ -91,17 +225,8 @@ GpuMonitor::GpuMonitor() {}
 
 GpuMonitor::~GpuMonitor() {
     if (m_hQuery) PdhCloseQuery(m_hQuery);
-    if (m_nvmlInitialized && m_hNvml) {
-        auto shutdown = (pfnNvmlShutdown)GetProcAddress(m_hNvml, "nvmlShutdown");
-        if (shutdown) shutdown();
-        FreeLibrary(m_hNvml);
-    }
-    if (m_nvApiInitialized && m_hNvApi) {
-        auto query = (pfnNvApiQueryInterface)GetProcAddress(m_hNvApi, "nvapi_QueryInterface");
-        auto unload = query ? (pfnNvApiUnload)query(NVAPI_UNLOAD) : nullptr;
-        if (unload) unload();
-    }
-    if (m_hNvApi) FreeLibrary(m_hNvApi);
+    TeardownNvml();
+    TeardownNvApi();
     CleanupWmi();
 }
 
@@ -257,8 +382,11 @@ SystemStats GpuMonitor::Update() {
     stats.cpuUsage = std::clamp(stats.cpuUsage, 0.0f, 100.0f);
     stats.gpuUsage = std::clamp(stats.gpuUsage, 0.0f, 100.0f);
     
+    RefreshDriverHandles();
+
     if (m_nvmlInitialized) {
         stats.gpuTemp = GetGpuTempNvml();
+        if (m_nvmlBroken) stats.gpuTemp = GetGpuTempWmi();
     } else {
         stats.gpuTemp = GetGpuTempWmi();
     }
@@ -274,15 +402,14 @@ SystemStats GpuMonitor::Update() {
 
 void GpuMonitor::GetPowerLimitInfo(SystemStats& stats) {
     if (!m_nvmlInitialized) return;
-    auto getLimit = (pfnNvmlDeviceGetPowerManagementLimit)GetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementLimit");
-    auto getConstraints = (pfnNvmlDeviceGetPowerManagementLimitConstraints)GetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementLimitConstraints");
-    auto getDefault = (pfnNvmlDeviceGetPowerManagementDefaultLimit)GetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementDefaultLimit");
+    auto getLimit = (pfnNvmlDeviceGetPowerManagementLimit)SafeGetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementLimit");
+    auto getConstraints = (pfnNvmlDeviceGetPowerManagementLimitConstraints)SafeGetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementLimitConstraints");
+    auto getDefault = (pfnNvmlDeviceGetPowerManagementDefaultLimit)SafeGetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementDefaultLimit");
     if (!getLimit || !getConstraints || !getDefault) return;
 
     unsigned int current = 0, minimum = 0, maximum = 0, defaultLimit = 0;
-    if (getLimit((nvmlDevice_t)m_nvmlDevice, &current) == NVML_SUCCESS &&
-        getConstraints((nvmlDevice_t)m_nvmlDevice, &minimum, &maximum) == NVML_SUCCESS &&
-        getDefault((nvmlDevice_t)m_nvmlDevice, &defaultLimit) == NVML_SUCCESS) {
+    if (SafeNvmlGetPowerLimits(getLimit, getConstraints, getDefault, (nvmlDevice_t)m_nvmlDevice,
+                               &current, &minimum, &maximum, &defaultLimit)) {
         stats.gpuPowerLimit = current / 1000.0f;
         stats.gpuPowerLimitMin = minimum / 1000.0f;
         stats.gpuPowerLimitMax = maximum / 1000.0f;
@@ -297,26 +424,30 @@ void GpuMonitor::GetPowerLimitInfo(SystemStats& stats) {
         } else {
             stats.gpuPowerLimitPercent = 100;
         }
+    } else {
+        // NVML call failed: the driver is likely being updated or unloaded.
+        // Mark it for reload and let the UI keep working with stale data.
+        m_nvmlBroken = true;
     }
 }
 
 PowerLimitSetResult GpuMonitor::SetPowerLimitPercent(int percent) {
     if (!m_nvmlInitialized) return PowerLimitSetResult::NotSupported;
-    auto getConstraints = (pfnNvmlDeviceGetPowerManagementLimitConstraints)GetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementLimitConstraints");
-    auto setLimit = (pfnNvmlDeviceSetPowerManagementLimit)GetProcAddress(m_hNvml, "nvmlDeviceSetPowerManagementLimit");
+    auto getConstraints = (pfnNvmlDeviceGetPowerManagementLimitConstraints)SafeGetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementLimitConstraints");
+    auto setLimit = (pfnNvmlDeviceSetPowerManagementLimit)SafeGetProcAddress(m_hNvml, "nvmlDeviceSetPowerManagementLimit");
     if (!getConstraints || !setLimit) return PowerLimitSetResult::NotSupported;
 
     unsigned int minimum = 0, maximum = 0;
-    if (getConstraints((nvmlDevice_t)m_nvmlDevice, &minimum, &maximum) != NVML_SUCCESS) {
+    if (!SafeNvmlGetConstraints(getConstraints, (nvmlDevice_t)m_nvmlDevice, &minimum, &maximum)) {
         return PowerLimitSetResult::NotSupported;
     }
     if (percent < 70 || percent > 100) return PowerLimitSetResult::InvalidValue;
 
-    auto getDefault = (pfnNvmlDeviceGetPowerManagementDefaultLimit)GetProcAddress(
+    auto getDefault = (pfnNvmlDeviceGetPowerManagementDefaultLimit)SafeGetProcAddress(
         m_hNvml, "nvmlDeviceGetPowerManagementDefaultLimit");
     unsigned int defaultLimit = 0;
     if (!getDefault ||
-        getDefault((nvmlDevice_t)m_nvmlDevice, &defaultLimit) != NVML_SUCCESS ||
+        !SafeNvmlGetDefaultLimit(getDefault, (nvmlDevice_t)m_nvmlDevice, &defaultLimit) ||
         defaultLimit == 0) {
         return PowerLimitSetResult::NotSupported;
     }
@@ -329,7 +460,11 @@ PowerLimitSetResult GpuMonitor::SetPowerLimitPercent(int percent) {
         return PowerLimitSetResult::InvalidValue;
     }
 
-    nvmlReturn_t result = setLimit((nvmlDevice_t)m_nvmlDevice, requested);
+    nvmlReturn_t result = NVML_ERROR_INVALID_ARGUMENT;
+    if (!SafeNvmlSetPowerLimit(setLimit, (nvmlDevice_t)m_nvmlDevice, requested, &result)) {
+        // Driver is mid-update: report a clean failure instead of crashing.
+        return PowerLimitSetResult::Failed;
+    }
     if (result == NVML_SUCCESS) return PowerLimitSetResult::Success;
     if (result == NVML_ERROR_NO_PERMISSION) return PowerLimitSetResult::RequiresElevation;
     if (result == NVML_ERROR_NOT_SUPPORTED) return PowerLimitSetResult::NotSupported;
@@ -399,11 +534,22 @@ bool GpuMonitor::InitNvml() {
     
     if (!m_hNvml) return false;
 
-    auto pInit = GetProcAddress(m_hNvml, "nvmlInit");
-    if (!pInit || ((pfnNvmlInit)pInit)() != NVML_SUCCESS) return false;
+    auto pInit = SafeGetProcAddress(m_hNvml, "nvmlInit");
+    if (!pInit || !SafeNvmlInit((pfnNvmlInit)pInit)) {
+        SafeFreeLibrary(m_hNvml);
+        m_hNvml = nullptr;
+        return false;
+    }
 
-    auto pGetHandle = GetProcAddress(m_hNvml, "nvmlDeviceGetHandleByIndex");
-    if (!pGetHandle || ((pfnNvmlDeviceGetHandleByIndex)pGetHandle)(0, (nvmlDevice_t*)&m_nvmlDevice) != NVML_SUCCESS) return false;
+    auto pGetHandle = SafeGetProcAddress(m_hNvml, "nvmlDeviceGetHandleByIndex");
+    if (!pGetHandle || !SafeNvmlGetHandle((pfnNvmlDeviceGetHandleByIndex)pGetHandle, 0, (nvmlDevice_t*)&m_nvmlDevice)) {
+        auto shutdown = (pfnNvmlShutdown)SafeGetProcAddress(m_hNvml, "nvmlShutdown");
+        if (shutdown) SafeNvmlShutdown(shutdown);
+        SafeFreeLibrary(m_hNvml);
+        m_hNvml = nullptr;
+        m_nvmlDevice = nullptr;
+        return false;
+    }
 
     m_nvmlInitialized = true;
     return true;
@@ -416,17 +562,32 @@ bool GpuMonitor::InitNvApi() {
     m_hNvApi = LoadLibraryExW(L"nvapi64.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!m_hNvApi) return false;
 
-    auto query = (pfnNvApiQueryInterface)GetProcAddress(m_hNvApi, "nvapi_QueryInterface");
-    if (!query) return false;
-    auto initialize = (pfnNvApiInitialize)query(NVAPI_INITIALIZE);
-    auto enumerate = (pfnNvApiEnumPhysicalGpus)query(NVAPI_ENUM_PHYSICAL_GPUS);
-    auto getPci = (pfnNvApiGetPciIdentifiers)query(NVAPI_GPU_GET_PCI_IDENTIFIERS);
-    if (!initialize || !enumerate || initialize() != NVAPI_OK) return false;
+    void* initializeFn = nullptr;
+    void* enumerateFn = nullptr;
+    void* getPciFn = nullptr;
+    if (!SafeNvApiQueryFunction(m_hNvApi, NVAPI_INITIALIZE, &initializeFn) || !initializeFn) {
+        SafeFreeLibrary(m_hNvApi);
+        m_hNvApi = nullptr;
+        return false;
+    }
+    SafeNvApiQueryFunction(m_hNvApi, NVAPI_ENUM_PHYSICAL_GPUS, &enumerateFn);
+    SafeNvApiQueryFunction(m_hNvApi, NVAPI_GPU_GET_PCI_IDENTIFIERS, &getPciFn);
+    auto initialize = (pfnNvApiInitialize)initializeFn;
+    auto enumerate = (pfnNvApiEnumPhysicalGpus)enumerateFn;
+    auto getPci = (pfnNvApiGetPciIdentifiers)getPciFn;
+    if (!enumerate || !SafeNvApiInitialize(initialize)) {
+        SafeFreeLibrary(m_hNvApi);
+        m_hNvApi = nullptr;
+        return false;
+    }
     m_nvApiInitialized = true;
 
     NvPhysicalGpuHandle handles[64] = {};
     unsigned int count = 0;
-    if (enumerate(handles, &count) != NVAPI_OK || count == 0) return false;
+    if (!SafeNvApiEnumGpus(enumerate, handles, &count) || count == 0) {
+        TeardownNvApi();
+        return false;
+    }
 
     m_nvApiGpu = handles[0];
     constexpr unsigned int astralIds[] = {
@@ -435,7 +596,7 @@ bool GpuMonitor::InitNvApi() {
     if (getPci) {
         for (unsigned int i = 0; i < count; ++i) {
             unsigned int deviceId = 0, subsystemId = 0, revisionId = 0, extDeviceId = 0;
-            if (getPci(handles[i], &deviceId, &subsystemId, &revisionId, &extDeviceId) != NVAPI_OK) continue;
+            if (!SafeNvApiGetPci(getPci, handles[i], &deviceId, &subsystemId, &revisionId, &extDeviceId)) continue;
             if (std::find(std::begin(astralIds), std::end(astralIds), subsystemId) != std::end(astralIds)) {
                 m_nvApiGpu = handles[i];
                 m_isAstral = true;
@@ -448,14 +609,83 @@ bool GpuMonitor::InitNvApi() {
 #endif
 }
 
+void GpuMonitor::TeardownNvml() {
+    if (m_hNvml) {
+        if (m_nvmlInitialized) {
+            auto shutdown = (pfnNvmlShutdown)SafeGetProcAddress(m_hNvml, "nvmlShutdown");
+            if (shutdown) SafeNvmlShutdown(shutdown);
+        }
+        SafeFreeLibrary(m_hNvml);
+    }
+    m_hNvml = nullptr;
+    m_nvmlDevice = nullptr;
+    m_nvmlInitialized = false;
+}
+
+void GpuMonitor::TeardownNvApi() {
+    if (m_hNvApi) {
+        if (m_nvApiInitialized) {
+            void* unloadFn = nullptr;
+            if (SafeNvApiQueryFunction(m_hNvApi, NVAPI_UNLOAD, &unloadFn) && unloadFn) {
+                SafeNvApiUnload((pfnNvApiUnload)unloadFn);
+            }
+        }
+        SafeFreeLibrary(m_hNvApi);
+    }
+    m_hNvApi = nullptr;
+    m_nvApiGpu = nullptr;
+    m_nvApiInitialized = false;
+    m_isAstral = false;
+}
+
+void GpuMonitor::RefreshDriverHandles() {
+    // A graphics driver install replaces nvml.dll / nvapi64.dll in System32.
+    // Detect the swap via the files' last-write times, then reload and
+    // re-initialize so the app keeps working with the new driver. NVML/NVAPI
+    // also fail while the driver service is restarting, so keep retrying
+    // (throttled to once every 3 s) until the driver is back.
+    const wchar_t nvml_dll[] = { L'n', L'v', L'm', L'l', L'.', L'd', L'l', L'l', L'\0' };
+    const wchar_t nvapi64_dll[] = { L'n', L'v', L'a', L'p', L'i', L'6', L'4', L'.', L'd', L'l', L'l', L'\0' };
+
+    ULARGE_INTEGER nvmlTime = {};
+    ULARGE_INTEGER nvapiTime = {};
+    const bool nvmlExists = GetDllLastWriteTime(nvml_dll, &nvmlTime);
+    const bool nvapiExists = GetDllLastWriteTime(nvapi64_dll, &nvapiTime);
+
+    const bool nvmlChanged = nvmlExists && m_nvmlDllTimeValid &&
+                             nvmlTime.QuadPart != m_nvmlDllTime.QuadPart;
+    const bool nvapiChanged = nvapiExists && m_nvApiDllTimeValid &&
+                              nvapiTime.QuadPart != m_nvApiDllTime.QuadPart;
+    if (nvmlExists) { m_nvmlDllTime = nvmlTime; m_nvmlDllTimeValid = true; }
+    if (nvapiExists) { m_nvApiDllTime = nvapiTime; m_nvApiDllTimeValid = true; }
+
+    const ULONGLONG now = GetTickCount64();
+
+    if (nvmlExists && (m_nvmlBroken || nvmlChanged || !m_nvmlInitialized) &&
+        now - m_nvmlLastInitAttempt >= 3000) {
+        m_nvmlLastInitAttempt = now;
+        m_nvmlBroken = false;
+        TeardownNvml();
+        InitNvml();
+    }
+
+    if (nvapiExists && (m_nvApiBroken || nvapiChanged || !m_nvApiInitialized) &&
+        now - m_nvApiLastInitAttempt >= 3000) {
+        m_nvApiLastInitAttempt = now;
+        m_nvApiBroken = false;
+        TeardownNvApi();
+        InitNvApi();
+    }
+}
+
 bool GpuMonitor::ReadAstral12VPinSensors(float currents[6], float voltages[6]) {
 #ifndef _WIN64
     return false;
 #else
     if (!m_nvApiInitialized || !m_isAstral || !m_nvApiGpu) return false;
-    auto query = (pfnNvApiQueryInterface)GetProcAddress(m_hNvApi, "nvapi_QueryInterface");
-    auto readI2c = query ? (pfnNvApiI2CReadEx)query(NVAPI_I2C_READ_EX) : nullptr;
-    if (!readI2c) return false;
+    void* readI2cFn = nullptr;
+    if (!SafeNvApiQueryFunction(m_hNvApi, NVAPI_I2C_READ_EX, &readI2cFn) || !readI2cFn) return false;
+    auto readI2c = (pfnNvApiI2CReadEx)readI2cFn;
 
     unsigned char raw[24] = {};
     unsigned char reg = 0x80;
@@ -471,7 +701,11 @@ bool GpuMonitor::ReadAstral12VPinSensors(float currents[6], float voltages[6]) {
     info.portId = 1;
     info.isPortIdSet = 1;
     unsigned int bytesRead = 0;
-    if (readI2c((NvPhysicalGpuHandle)m_nvApiGpu, &info, &bytesRead) != NVAPI_OK) return false;
+    if (!SafeNvApiI2CRead(readI2c, (NvPhysicalGpuHandle)m_nvApiGpu, &info, &bytesRead)) {
+        // Driver is being replaced/unloaded: re-initialize NVAPI next tick.
+        m_nvApiBroken = true;
+        return false;
+    }
 
     auto readBe16 = [&](int offset) -> unsigned int {
         return ((unsigned int)raw[offset] << 8) | raw[offset + 1];
@@ -541,18 +775,21 @@ std::vector<GpuProcessInfo> GpuMonitor::GetGpuProcessesAbove(float thresholdPerc
 float GpuMonitor::GetGpuTempNvml() {
     if (!m_nvmlInitialized) return 0.0f;
     unsigned int temp = 0;
-    auto getTemp = (pfnNvmlDeviceGetTemperature)GetProcAddress(m_hNvml, "nvmlDeviceGetTemperature");
-    if (getTemp && getTemp((nvmlDevice_t)m_nvmlDevice, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS) {
+    auto getTemp = (pfnNvmlDeviceGetTemperature)SafeGetProcAddress(m_hNvml, "nvmlDeviceGetTemperature");
+    if (getTemp && SafeNvmlGetTemperature(getTemp, (nvmlDevice_t)m_nvmlDevice, &temp)) {
         return (float)temp;
     }
+    // Driver is being updated/unloaded: request a reload and let the caller
+    // fall back to WMI for this tick.
+    m_nvmlBroken = true;
     return 0.0f;
 }
 
 std::wstring GpuMonitor::GetGpuNameNvml() {
     if (!m_nvmlInitialized) return L"";
     char name[64];
-    auto getName = (pfnNvmlDeviceGetName)GetProcAddress(m_hNvml, "nvmlDeviceGetName");
-    if (getName && getName((nvmlDevice_t)m_nvmlDevice, name, 64) == NVML_SUCCESS) {
+    auto getName = (pfnNvmlDeviceGetName)SafeGetProcAddress(m_hNvml, "nvmlDeviceGetName");
+    if (getName && SafeNvmlGetName(getName, (nvmlDevice_t)m_nvmlDevice, name, 64)) {
         std::string s(name);
         return std::wstring(s.begin(), s.end());
     }

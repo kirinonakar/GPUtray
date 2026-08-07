@@ -68,19 +68,33 @@ private:
     // NVML for NVIDIA GPUs
     HMODULE m_hNvml = nullptr;
     bool m_nvmlInitialized = false;
+    bool m_nvmlBroken = false;
+    ULARGE_INTEGER m_nvmlDllTime = {};
+    bool m_nvmlDllTimeValid = false;
+    ULONGLONG m_nvmlLastInitAttempt = 0;
     void* m_nvmlDevice = nullptr;
     bool InitNvml();
     float GetGpuTempNvml();
     std::wstring GetGpuNameNvml();
     void GetPowerLimitInfo(SystemStats& stats);
+    void TeardownNvml();
 
     // NVAPI for ASUS Astral per-pin current sensors.
     HMODULE m_hNvApi = nullptr;
     bool m_nvApiInitialized = false;
+    bool m_nvApiBroken = false;
+    ULARGE_INTEGER m_nvApiDllTime = {};
+    bool m_nvApiDllTimeValid = false;
+    ULONGLONG m_nvApiLastInitAttempt = 0;
     void* m_nvApiGpu = nullptr;
     bool m_isAstral = false;
     bool InitNvApi();
     bool ReadAstral12VPinSensors(float currents[6], float voltages[6]);
+    void TeardownNvApi();
+
+    // Driver-update resilience: nvml.dll / nvapi64.dll are replaced while a
+    // graphics driver is being installed. Detect the swap and reload both.
+    void RefreshDriverHandles();
 
     // WMI for Temperatures and Fallback
     bool InitWmi();
