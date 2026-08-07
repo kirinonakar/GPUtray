@@ -26,6 +26,8 @@ private:
     void AdjustPowerLimit(int deltaPercent, bool useDefault = false);
     void ApplyPowerLimit();
     void CheckPinCurrentProtection(const SystemStats& stats);
+    void LoadSettings();
+    void SaveSettings() const;
 
     HWND m_hWnd;
     HWND m_hParent;

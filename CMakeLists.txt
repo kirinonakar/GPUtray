@@ -46,6 +46,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     wbemuuid.lib
     dxgi.lib
     d3d11.lib
+    advapi32.lib
 )
 
 # Use Unicode

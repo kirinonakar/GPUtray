@@ -14,6 +14,7 @@ using namespace Gdiplus;
 #include "TrayIcon.h"
 
 GraphPopup::GraphPopup(HWND hParent, GpuMonitor* monitor, TrayIcon* trayIcon) : m_hWnd(NULL), m_hParent(hParent), m_monitor(monitor), m_trayIcon(trayIcon) {
+    LoadSettings();
     UpdateTrayMetrics();
 }
 
@@ -158,10 +159,12 @@ LRESULT CALLBACK GraphPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPA
                         if (count >= 5) break; 
                     }
                     pThis->m_selectedMetrics[(int)area.metric] = !currentlySelected;
+                    pThis->SaveSettings();
                     pThis->UpdateTrayMetrics();
                     InvalidateRect(hWnd, NULL, FALSE);
                 } else if (area.action == 1) {
                     pThis->m_saveLog = !pThis->m_saveLog;
+                    pThis->SaveSettings();
                     InvalidateRect(hWnd, NULL, FALSE);
                 } else if (area.action == 2) {
                     pThis->AdjustPowerLimit(-5);
@@ -178,6 +181,7 @@ LRESULT CALLBACK GraphPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPA
                 } else if (area.action == 8) {
                     pThis->m_enablePinProtection = !pThis->m_enablePinProtection;
                     pThis->m_pinFaultLatched = false;
+                    pThis->SaveSettings();
                     InvalidateRect(hWnd, NULL, FALSE);
                 }
                 break;
@@ -277,9 +281,12 @@ void GraphPopup::OnPaint(HWND hWnd) {
 
     // Optional destructive protection is deliberately opt-in.
     Pen protectPen(Color(255, 150, 150, 150), 1.0f);
+    Font protectCheckFont(L"Arial", 15, FontStyleBold);
     SolidBrush protectOn(Color(255, 255, 180, 60));
     g.DrawRectangle(&protectPen, 10, y, 20, 20);
-    if (m_enablePinProtection) g.DrawString(L"\u2713", -1, &controlFont, PointF(13, (REAL)y + 1), &protectOn);
+    if (m_enablePinProtection) {
+        g.DrawString(L"\u2713", -1, &protectCheckFont, PointF(1, (REAL)y - 7), &protectOn);
+    }
     g.DrawString(L"Pin safety: warn on 0A / >9.2A and terminate GPU processes >=50%", -1,
                  &controlFont, PointF(40, (REAL)y), &controlText);
     m_clickAreas.push_back({ { 5, y - 4, m_width - 10, y + 24 }, Metric::CPU, false, 8 });
@@ -465,6 +472,51 @@ void GraphPopup::CheckPinCurrentProtection(const SystemStats& stats) {
             CloseHandle(handle);
         }
     }
+}
+
+void GraphPopup::LoadSettings() {
+    auto readDword = [](const wchar_t* name, DWORD& value) {
+        DWORD size = sizeof(value);
+        return RegGetValueW(HKEY_CURRENT_USER, L"Software\\GpuTray", name,
+                            RRF_RT_REG_DWORD, nullptr, &value, &size) == ERROR_SUCCESS;
+    };
+
+    DWORD value = 0;
+    if (readDword(L"PinSafetyEnabled", value)) {
+        m_enablePinProtection = value != 0;
+    }
+    if (readDword(L"SaveLogEnabled", value)) {
+        m_saveLog = value != 0;
+    }
+    if (readDword(L"SelectedMetricsMask", value)) {
+        for (int i = 0; i < (int)Metric::COUNT; ++i) {
+            m_selectedMetrics[i] = (value & (1u << i)) != 0;
+        }
+    }
+}
+
+void GraphPopup::SaveSettings() const {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\GpuTray", 0, nullptr,
+                        REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        return;
+    }
+
+    DWORD pinEnabled = m_enablePinProtection ? 1u : 0u;
+    RegSetValueExW(key, L"PinSafetyEnabled", 0, REG_DWORD,
+                   reinterpret_cast<const BYTE*>(&pinEnabled), sizeof(pinEnabled));
+
+    DWORD logEnabled = m_saveLog ? 1u : 0u;
+    RegSetValueExW(key, L"SaveLogEnabled", 0, REG_DWORD,
+                   reinterpret_cast<const BYTE*>(&logEnabled), sizeof(logEnabled));
+
+    DWORD metricsMask = 0;
+    for (int i = 0; i < (int)Metric::COUNT; ++i) {
+        if (m_selectedMetrics[i]) metricsMask |= 1u << i;
+    }
+    RegSetValueExW(key, L"SelectedMetricsMask", 0, REG_DWORD,
+                   reinterpret_cast<const BYTE*>(&metricsMask), sizeof(metricsMask));
+    RegCloseKey(key);
 }
 
 void GraphPopup::UpdateTrayMetrics() {
