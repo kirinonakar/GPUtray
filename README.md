@@ -30,6 +30,7 @@ A lightweight Windows system tray application that monitors GPU performance and 
   - Adjust from 70% to 100% of the card's BIOS default TDP in 1% steps, matching MSI Afterburner's percentage semantics.
   - Stage changes with -5%, -1%, +1%, +5%, or 100%, then apply them explicitly with the Apply button.
   - Uses NVML and requests administrator approval only when Apply is clicked and the driver requires it.
+  - **Apply at Windows startup**: Check "Apply N% power limit at Windows startup" in the dashboard to register a logon scheduled task that silently re-applies the last applied power limit (stored in the registry) every time you sign in. Unchecking removes the task. Enabling/disabling requires one-time administrator approval; the power limit itself is applied without any prompt at startup.
 
 ## Technologies Used
 
@@ -82,6 +83,7 @@ You can download the latest version from the [Releases Page](https://github.com/
 - **Right-Click**: Opens the performance dashboard with 5 detailed line graphs.
 - **Configure**: Use the **checkboxes** next to each metric in the dashboard to toggle its visibility in the system tray. (Maximum 5 items).
 - **Logging**: Check "Save metrics to gputray.csv" at the bottom of the dashboard to start recording data.
+- **Startup power limit**: Check "Apply N% power limit at Windows startup" below the power limit buttons to apply the saved power limit automatically on every Windows sign-in (an administrator approval is requested once when enabling or disabling).
 - **Close**: Click "Close App" at the bottom of the dashboard to terminate.
 
 ## License
