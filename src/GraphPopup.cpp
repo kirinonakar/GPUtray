@@ -183,6 +183,11 @@ LRESULT CALLBACK GraphPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPA
                     pThis->m_pinFaultLatched = false;
                     pThis->SaveSettings();
                     InvalidateRect(hWnd, NULL, FALSE);
+                } else if (area.action == 9) {
+                    pThis->m_applyPowerLimitOnStartup = !pThis->m_applyPowerLimitOnStartup;
+                    pThis->SaveSettings();
+                    pThis->UpdateStartupEntry();
+                    InvalidateRect(hWnd, NULL, FALSE);
                 }
                 break;
             }
@@ -277,6 +282,24 @@ void GraphPopup::OnPaint(HWND hWnd) {
             x += widths[i] + 8;
         }
     }
+    y += 32;
+
+    // Apply saved power limit at Windows startup checkbox.
+    Pen startupPen(Color(255, 150, 150, 150), 1.0f);
+    Font startupCheckFont(L"Arial", 15, FontStyleBold);
+    SolidBrush startupOn(Color(255, 120, 200, 255));
+    g.DrawRectangle(&startupPen, 10, y, 20, 20);
+    if (m_applyPowerLimitOnStartup) {
+        g.DrawString(L"\u2713", -1, &startupCheckFont, PointF(1, (REAL)y - 7), &startupOn);
+    }
+    std::wstringstream startupText;
+    startupText << L"Apply ";
+    if (m_startupPowerLimitPercent >= 70 && m_startupPowerLimitPercent <= 100) {
+        startupText << m_startupPowerLimitPercent << L"% ";
+    }
+    startupText << L"power limit at Windows startup";
+    g.DrawString(startupText.str().c_str(), -1, &controlFont, PointF(40, (REAL)y), &controlText);
+    m_clickAreas.push_back({ { 5, y - 4, m_width - 10, y + 24 }, Metric::CPU, false, 9 });
     y += 32;
 
     // Optional destructive protection is deliberately opt-in.
@@ -408,6 +431,8 @@ void GraphPopup::ApplyPowerLimit() {
 
     PowerLimitSetResult result = m_monitor->SetPowerLimitPercent(target);
     if (result == PowerLimitSetResult::Success) {
+        m_startupPowerLimitPercent = target;
+        SaveSettings();
         InvalidateRect(m_hWnd, NULL, FALSE);
         return;
     }
@@ -416,7 +441,11 @@ void GraphPopup::ApplyPowerLimit() {
         GetModuleFileNameW(nullptr, executable, MAX_PATH);
         std::wstring parameters = L"--set-power-limit-percent " + std::to_wstring(target);
         HINSTANCE launched = ShellExecuteW(m_hWnd, L"runas", executable, parameters.c_str(), nullptr, SW_HIDE);
-        if ((INT_PTR)launched > 32) return;
+        if ((INT_PTR)launched > 32) {
+            m_startupPowerLimitPercent = target;
+            SaveSettings();
+            return;
+        }
         MessageBoxW(m_hWnd, L"Administrator approval was cancelled; the power limit was not changed.", L"GPU Power Limit", MB_OK | MB_ICONWARNING);
         return;
     }
@@ -488,6 +517,12 @@ void GraphPopup::LoadSettings() {
     if (readDword(L"SaveLogEnabled", value)) {
         m_saveLog = value != 0;
     }
+    if (readDword(L"ApplyPowerLimitOnStartup", value)) {
+        m_applyPowerLimitOnStartup = value != 0;
+    }
+    if (readDword(L"StartupPowerLimitPercent", value)) {
+        m_startupPowerLimitPercent = (int)value;
+    }
     if (readDword(L"SelectedMetricsMask", value)) {
         for (int i = 0; i < (int)Metric::COUNT; ++i) {
             m_selectedMetrics[i] = (value & (1u << i)) != 0;
@@ -510,6 +545,14 @@ void GraphPopup::SaveSettings() const {
     RegSetValueExW(key, L"SaveLogEnabled", 0, REG_DWORD,
                    reinterpret_cast<const BYTE*>(&logEnabled), sizeof(logEnabled));
 
+    DWORD startupEnabled = m_applyPowerLimitOnStartup ? 1u : 0u;
+    RegSetValueExW(key, L"ApplyPowerLimitOnStartup", 0, REG_DWORD,
+                   reinterpret_cast<const BYTE*>(&startupEnabled), sizeof(startupEnabled));
+
+    DWORD startupPercent = (DWORD)m_startupPowerLimitPercent;
+    RegSetValueExW(key, L"StartupPowerLimitPercent", 0, REG_DWORD,
+                   reinterpret_cast<const BYTE*>(&startupPercent), sizeof(startupPercent));
+
     DWORD metricsMask = 0;
     for (int i = 0; i < (int)Metric::COUNT; ++i) {
         if (m_selectedMetrics[i]) metricsMask |= 1u << i;
@@ -517,6 +560,35 @@ void GraphPopup::SaveSettings() const {
     RegSetValueExW(key, L"SelectedMetricsMask", 0, REG_DWORD,
                    reinterpret_cast<const BYTE*>(&metricsMask), sizeof(metricsMask));
     RegCloseKey(key);
+}
+
+void GraphPopup::UpdateStartupEntry() {
+    wchar_t executable[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, executable, MAX_PATH);
+
+    if (m_applyPowerLimitOnStartup) {
+        if (m_startupPowerLimitPercent < 70 || m_startupPowerLimitPercent > 100) {
+            m_startupPowerLimitPercent = m_lastStats.gpuPowerLimitSupported
+                ? m_lastStats.gpuPowerLimitPercent : 100;
+        }
+        SaveSettings();
+        std::wstring params = L"/Create /TN \"GpuTray Power Limit\" /TR \"\\\"" + std::wstring(executable) +
+                              L"\\\" --apply-startup-power-limit\" /SC ONLOGON /RL HIGHEST /F";
+        HINSTANCE launched = ShellExecuteW(m_hWnd, L"runas", L"schtasks.exe", params.c_str(), nullptr, SW_HIDE);
+        if ((INT_PTR)launched <= 32) {
+            m_applyPowerLimitOnStartup = false;
+            SaveSettings();
+            InvalidateRect(m_hWnd, NULL, FALSE);
+        }
+    } else {
+        HINSTANCE launched = ShellExecuteW(m_hWnd, L"runas", L"schtasks.exe",
+                                           L"/Delete /TN \"GpuTray Power Limit\" /F", nullptr, SW_HIDE);
+        if ((INT_PTR)launched <= 32) {
+            m_applyPowerLimitOnStartup = true;
+            SaveSettings();
+            InvalidateRect(m_hWnd, NULL, FALSE);
+        }
+    }
 }
 
 void GraphPopup::UpdateTrayMetrics() {

@@ -42,6 +42,20 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
+    const wchar_t* startupPrefix = L"--apply-startup-power-limit";
+    if (pCmdLine && wcsncmp(pCmdLine, startupPrefix, wcslen(startupPrefix)) == 0) {
+        DWORD percent = 100;
+        DWORD size = sizeof(percent);
+        RegGetValueW(HKEY_CURRENT_USER, L"Software\\GpuTray", L"StartupPowerLimitPercent",
+                     RRF_RT_REG_DWORD, nullptr, &percent, &size);
+        if (percent < 70 || percent > 100) percent = 100;
+        GpuMonitor helper;
+        PowerLimitSetResult result = helper.Initialize()
+            ? helper.SetPowerLimitPercent((int)percent)
+            : PowerLimitSetResult::Failed;
+        return result == PowerLimitSetResult::Success ? 0 : 1;
+    }
+
     const wchar_t* setLimitPrefix = L"--set-power-limit-percent ";
     if (pCmdLine && wcsncmp(pCmdLine, setLimitPrefix, wcslen(setLimitPrefix)) == 0) {
         int percent = (int)wcstol(pCmdLine + wcslen(setLimitPrefix), nullptr, 10);

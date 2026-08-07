@@ -26,6 +26,7 @@ private:
     void AdjustPowerLimit(int deltaPercent, bool useDefault = false);
     void ApplyPowerLimit();
     void CheckPinCurrentProtection(const SystemStats& stats);
+    void UpdateStartupEntry();
     void LoadSettings();
     void SaveSettings() const;
 
@@ -40,6 +41,8 @@ private:
     bool m_pinFaultLatched = false;
     int m_pendingPowerLimitPercent = -1;
     bool m_powerLimitDirty = false;
+    bool m_applyPowerLimitOnStartup = false;
+    int m_startupPowerLimitPercent = -1;
     
     struct ClickArea {
         RECT rect;
@@ -62,5 +65,5 @@ private:
 
     const int m_historyLimit = 320;
     const int m_width = 950;
-    const int m_height = 800;
+    const int m_height = 840;
 };
