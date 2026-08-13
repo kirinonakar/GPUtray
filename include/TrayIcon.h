@@ -12,6 +12,7 @@ public:
     ~TrayIcon();
 
     bool Initialize();
+    bool RestoreAfterExplorerRestart();
     void Update(const SystemStats& stats);
     void SetActiveMetrics(const std::vector<Metric>& metrics) { m_activeMetrics = metrics; }
     void ShowContextMenu();
@@ -23,7 +24,8 @@ private:
 
     HWND m_hWnd;
     GpuMonitor* m_monitor;
-    NOTIFYICONDATA m_nid;
+    NOTIFYICONDATA m_nid{};
+    bool m_iconAdded = false;
     
     ULONG_PTR m_gdiplusToken;
     std::vector<Metric> m_activeMetrics = { Metric::GPU, Metric::GPU_MEM };

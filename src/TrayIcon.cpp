@@ -13,7 +13,12 @@ TrayIcon::TrayIcon(HWND hWnd, GpuMonitor* monitor) : m_hWnd(hWnd), m_monitor(mon
 }
 
 TrayIcon::~TrayIcon() {
-    Shell_NotifyIcon(NIM_DELETE, &m_nid);
+    if (m_iconAdded) {
+        Shell_NotifyIcon(NIM_DELETE, &m_nid);
+    }
+    if (m_nid.hIcon) {
+        DestroyIcon(m_nid.hIcon);
+    }
     GdiplusShutdown(m_gdiplusToken);
 }
 
@@ -26,7 +31,24 @@ bool TrayIcon::Initialize() {
     m_nid.hIcon = CreateDynamicIcon(SystemStats{});
     wcscpy_s(m_nid.szTip, L"GPU Tray Monitor");
 
-    return Shell_NotifyIcon(NIM_ADD, &m_nid);
+    m_iconAdded = Shell_NotifyIcon(NIM_ADD, &m_nid) != FALSE;
+    if (!m_iconAdded && m_nid.hIcon) {
+        DestroyIcon(m_nid.hIcon);
+        m_nid.hIcon = nullptr;
+    }
+    return m_iconAdded;
+}
+
+bool TrayIcon::RestoreAfterExplorerRestart() {
+    if (!m_nid.hWnd || !m_nid.hIcon) {
+        return false;
+    }
+
+    // Explorer removes notification icons when it exits. Re-add the current
+    // icon and restore all fields needed for future tray callbacks.
+    m_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    m_iconAdded = Shell_NotifyIcon(NIM_ADD, &m_nid) != FALSE;
+    return m_iconAdded;
 }
 
 void TrayIcon::Update(const SystemStats& stats) {

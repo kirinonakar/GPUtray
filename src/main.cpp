@@ -13,8 +13,16 @@
 GpuMonitor* g_monitor = nullptr;
 TrayIcon* g_trayIcon = nullptr;
 GraphPopup* g_graphPopup = nullptr;
+UINT g_taskbarCreatedMessage = 0;
 
 LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (g_taskbarCreatedMessage != 0 && uMsg == g_taskbarCreatedMessage) {
+        if (g_trayIcon) {
+            g_trayIcon->RestoreAfterExplorerRestart();
+        }
+        return 0;
+    }
+
     switch (uMsg) {
     case WM_APP + 1: // Tray message
     {
@@ -83,6 +91,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     }
 
     // Hidden window to handle messages
+    g_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
+    if (g_taskbarCreatedMessage == 0) return 0;
+
     const wchar_t CLASS_NAME[] = L"GpuTrayHiddenWindow";
     WNDCLASSW wc = {};
     wc.lpfnWndProc = WindowProc;
