@@ -213,14 +213,6 @@ static_assert(offsetof(NvI2CInfoV3, data) == 32, "NVAPI I2C data offset mismatch
 static_assert(offsetof(NvI2CInfoV3, isPortIdSet) == 56, "NVAPI I2C port flag offset mismatch");
 #endif
 
-// Helper function to increase code complexity and entropy
-static void PerformSanityCheck() {
-    volatile double dummy = 0.0;
-    for (int i = 0; i < 1000; i++) {
-        dummy += (double)(i % 17) * 3.14159;
-    }
-}
-
 GpuMonitor::GpuMonitor() {}
 
 GpuMonitor::~GpuMonitor() {
@@ -520,16 +512,11 @@ float GpuMonitor::GetGpuMemoryUsageDxgi() {
 }
 
 bool GpuMonitor::InitNvml() {
-    PerformSanityCheck();
-
-    // Use runtime string construction to avoid simple string-based heuristics
-    const wchar_t nvml_dll[] = { L'n', L'v', L'm', L'l', L'.', L'd', L'l', L'l', L'\0' };
-    
     // First try secure system32 search
-    m_hNvml = LoadLibraryExW(nvml_dll, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    m_hNvml = LoadLibraryExW(L"nvml.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!m_hNvml) {
         // Fallback for custom driver paths or older setups
-        m_hNvml = LoadLibraryW(nvml_dll);
+        m_hNvml = LoadLibraryW(L"nvml.dll");
     }
     
     if (!m_hNvml) return false;
@@ -644,13 +631,10 @@ void GpuMonitor::RefreshDriverHandles() {
     // re-initialize so the app keeps working with the new driver. NVML/NVAPI
     // also fail while the driver service is restarting, so keep retrying
     // (throttled to once every 3 s) until the driver is back.
-    const wchar_t nvml_dll[] = { L'n', L'v', L'm', L'l', L'.', L'd', L'l', L'l', L'\0' };
-    const wchar_t nvapi64_dll[] = { L'n', L'v', L'a', L'p', L'i', L'6', L'4', L'.', L'd', L'l', L'l', L'\0' };
-
     ULARGE_INTEGER nvmlTime = {};
     ULARGE_INTEGER nvapiTime = {};
-    const bool nvmlExists = GetDllLastWriteTime(nvml_dll, &nvmlTime);
-    const bool nvapiExists = GetDllLastWriteTime(nvapi64_dll, &nvapiTime);
+    const bool nvmlExists = GetDllLastWriteTime(L"nvml.dll", &nvmlTime);
+    const bool nvapiExists = GetDllLastWriteTime(L"nvapi64.dll", &nvapiTime);
 
     const bool nvmlChanged = nvmlExists && m_nvmlDllTimeValid &&
                              nvmlTime.QuadPart != m_nvmlDllTime.QuadPart;

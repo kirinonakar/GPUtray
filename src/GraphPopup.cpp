@@ -7,7 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <ctime>
-#include <shellapi.h>
+#include "StartupTask.h"
 
 using namespace Gdiplus;
 
@@ -437,11 +437,9 @@ void GraphPopup::ApplyPowerLimit() {
         return;
     }
     if (result == PowerLimitSetResult::RequiresElevation) {
-        wchar_t executable[MAX_PATH] = {};
-        GetModuleFileNameW(nullptr, executable, MAX_PATH);
         std::wstring parameters = L"--set-power-limit-percent " + std::to_wstring(target);
-        HINSTANCE launched = ShellExecuteW(m_hWnd, L"runas", executable, parameters.c_str(), nullptr, SW_HIDE);
-        if ((INT_PTR)launched > 32) {
+        DWORD helperExitCode = ERROR_GEN_FAILURE;
+        if (RunElevatedSelfAndWait(m_hWnd, parameters, &helperExitCode) && helperExitCode == 0) {
             m_startupPowerLimitPercent = target;
             SaveSettings();
             return;
@@ -563,27 +561,23 @@ void GraphPopup::SaveSettings() const {
 }
 
 void GraphPopup::UpdateStartupEntry() {
-    wchar_t executable[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, executable, MAX_PATH);
-
     if (m_applyPowerLimitOnStartup) {
         if (m_startupPowerLimitPercent < 70 || m_startupPowerLimitPercent > 100) {
             m_startupPowerLimitPercent = m_lastStats.gpuPowerLimitSupported
                 ? m_lastStats.gpuPowerLimitPercent : 100;
         }
         SaveSettings();
-        std::wstring params = L"/Create /TN \"GpuTray Power Limit\" /TR \"\\\"" + std::wstring(executable) +
-                              L"\\\" --apply-startup-power-limit\" /SC ONLOGON /RL HIGHEST /F";
-        HINSTANCE launched = ShellExecuteW(m_hWnd, L"runas", L"schtasks.exe", params.c_str(), nullptr, SW_HIDE);
-        if ((INT_PTR)launched <= 32) {
+        DWORD helperExitCode = ERROR_GEN_FAILURE;
+        if (!RunElevatedSelfAndWait(m_hWnd, L"--configure-startup-task enable", &helperExitCode) ||
+            helperExitCode != 0) {
             m_applyPowerLimitOnStartup = false;
             SaveSettings();
             InvalidateRect(m_hWnd, NULL, FALSE);
         }
     } else {
-        HINSTANCE launched = ShellExecuteW(m_hWnd, L"runas", L"schtasks.exe",
-                                           L"/Delete /TN \"GpuTray Power Limit\" /F", nullptr, SW_HIDE);
-        if ((INT_PTR)launched <= 32) {
+        DWORD helperExitCode = ERROR_GEN_FAILURE;
+        if (!RunElevatedSelfAndWait(m_hWnd, L"--configure-startup-task disable", &helperExitCode) ||
+            helperExitCode != 0) {
             m_applyPowerLimitOnStartup = true;
             SaveSettings();
             InvalidateRect(m_hWnd, NULL, FALSE);

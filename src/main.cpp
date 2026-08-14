@@ -7,6 +7,7 @@
 #include "GpuMonitor.h"
 #include "TrayIcon.h"
 #include "GraphPopup.h"
+#include "StartupTask.h"
 #include "resource.h"
 
 // Globals
@@ -50,6 +51,19 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
+    const wchar_t* configureTaskPrefix = L"--configure-startup-task ";
+    if (pCmdLine && wcsncmp(pCmdLine, configureTaskPrefix, wcslen(configureTaskPrefix)) == 0) {
+        const wchar_t* operation = pCmdLine + wcslen(configureTaskPrefix);
+        const bool enable = wcscmp(operation, L"enable") == 0;
+        const bool disable = wcscmp(operation, L"disable") == 0;
+        if (!enable && !disable) return 1;
+
+        const StartupTaskResult result = ConfigureStartupPowerLimitTask(
+            enable, GetCurrentExecutablePath());
+        return result == StartupTaskResult::Success ? 0 :
+               result == StartupTaskResult::AccessDenied ? 2 : 1;
+    }
+
     const wchar_t* startupPrefix = L"--apply-startup-power-limit";
     if (pCmdLine && wcsncmp(pCmdLine, startupPrefix, wcslen(startupPrefix)) == 0) {
         DWORD percent = 100;
