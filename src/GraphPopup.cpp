@@ -35,7 +35,18 @@ bool GraphPopup::Create() {
 
     m_hWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"GpuTrayPopup", L"", WS_POPUP | WS_BORDER, 0, 0, m_width, m_height, m_hParent, NULL, GetModuleHandle(NULL), this);
 
-    return m_hWnd != NULL;
+    if (!m_hWnd) return false;
+
+    m_backBuffer = std::make_unique<Bitmap>(m_width, m_height, PixelFormat32bppPARGB);
+    if (m_backBuffer->GetLastStatus() != Ok) {
+        m_backBuffer.reset();
+        return false;
+    }
+
+    // Warm up GDI+, fonts and the dashboard layout before the user opens it.
+    RenderBackBuffer();
+
+    return true;
 }
 
 void GraphPopup::Show(int x, int y) {
@@ -88,6 +99,9 @@ void GraphPopup::Update(const SystemStats& stats) {
 
     CheckPinCurrentProtection(stats);
 
+    // Rendering while hidden keeps the next popup frame ready.  Painting the
+    // window itself is now only a fast bitmap copy.
+    RenderBackBuffer();
     if (m_hWnd && IsWindowVisible(m_hWnd)) {
         InvalidateRect(m_hWnd, NULL, FALSE);
     }
@@ -161,11 +175,11 @@ LRESULT CALLBACK GraphPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPA
                     pThis->m_selectedMetrics[(int)area.metric] = !currentlySelected;
                     pThis->SaveSettings();
                     pThis->UpdateTrayMetrics();
-                    InvalidateRect(hWnd, NULL, FALSE);
+                    pThis->Refresh();
                 } else if (area.action == 1) {
                     pThis->m_saveLog = !pThis->m_saveLog;
                     pThis->SaveSettings();
-                    InvalidateRect(hWnd, NULL, FALSE);
+                    pThis->Refresh();
                 } else if (area.action == 2) {
                     pThis->AdjustPowerLimit(-5);
                 } else if (area.action == 3) {
@@ -182,12 +196,12 @@ LRESULT CALLBACK GraphPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPA
                     pThis->m_enablePinProtection = !pThis->m_enablePinProtection;
                     pThis->m_pinFaultLatched = false;
                     pThis->SaveSettings();
-                    InvalidateRect(hWnd, NULL, FALSE);
+                    pThis->Refresh();
                 } else if (area.action == 9) {
                     pThis->m_applyPowerLimitOnStartup = !pThis->m_applyPowerLimitOnStartup;
                     pThis->SaveSettings();
                     pThis->UpdateStartupEntry();
-                    InvalidateRect(hWnd, NULL, FALSE);
+                    pThis->Refresh();
                 }
                 break;
             }
@@ -208,11 +222,21 @@ LRESULT CALLBACK GraphPopup::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPA
 void GraphPopup::OnPaint(HWND hWnd) {
     PAINTSTRUCT ps;
     HDC hdc = BeginPaint(hWnd, &ps);
-    
-    Rect clientRect;
-    GetClientRect(hWnd, (LPRECT)&clientRect);
-    Bitmap memBitmap(clientRect.Width, clientRect.Height);
-    Graphics g(&memBitmap);
+
+    if (m_backBufferDirty) {
+        RenderBackBuffer();
+    }
+    if (m_backBuffer) {
+        Graphics frontG(hdc);
+        frontG.DrawImage(m_backBuffer.get(), 0, 0);
+    }
+    EndPaint(hWnd, &ps);
+}
+
+void GraphPopup::RenderBackBuffer() {
+    if (!m_backBuffer) return;
+
+    Graphics g(m_backBuffer.get());
     g.SetSmoothingMode(SmoothingModeAntiAlias);
     g.Clear(Color(255, 30, 30, 30));
 
@@ -345,9 +369,14 @@ void GraphPopup::OnPaint(HWND hWnd) {
     format.SetLineAlignment(StringAlignmentCenter);
     g.DrawString(L"Close App", -1, &font, RectF(10, (REAL)m_height - btnHeight - 10, (REAL)m_width - 20, (REAL)btnHeight), &format, &whiteBrush);
 
-    Graphics frontG(hdc);
-    frontG.DrawImage(&memBitmap, 0, 0);
-    EndPaint(hWnd, &ps);
+    m_backBufferDirty = false;
+}
+
+void GraphPopup::Refresh() {
+    m_backBufferDirty = true;
+    if (m_hWnd) {
+        InvalidateRect(m_hWnd, NULL, FALSE);
+    }
 }
 
 void GraphPopup::DrawGraphItem(Graphics& g, Metric metric, const std::wstring& label, const std::deque<float>& history, int& yPos, Color color, float currentVal, const std::wstring& unit, const std::wstring& extra, float graphMax, bool valueAvailable, bool showCurrentValue, bool showGraph, bool showCheckbox) {
@@ -422,7 +451,7 @@ void GraphPopup::AdjustPowerLimit(int deltaPercent, bool useDefault) {
     int base = m_pendingPowerLimitPercent >= 70 ? m_pendingPowerLimitPercent : m_lastStats.gpuPowerLimitPercent;
     m_pendingPowerLimitPercent = useDefault ? 100 : std::clamp(base + deltaPercent, 70, 100);
     m_powerLimitDirty = m_pendingPowerLimitPercent != m_lastStats.gpuPowerLimitPercent;
-    InvalidateRect(m_hWnd, NULL, FALSE);
+    Refresh();
 }
 
 void GraphPopup::ApplyPowerLimit() {
@@ -433,7 +462,7 @@ void GraphPopup::ApplyPowerLimit() {
     if (result == PowerLimitSetResult::Success) {
         m_startupPowerLimitPercent = target;
         SaveSettings();
-        InvalidateRect(m_hWnd, NULL, FALSE);
+        Refresh();
         return;
     }
     if (result == PowerLimitSetResult::RequiresElevation) {
@@ -572,7 +601,7 @@ void GraphPopup::UpdateStartupEntry() {
             helperExitCode != 0) {
             m_applyPowerLimitOnStartup = false;
             SaveSettings();
-            InvalidateRect(m_hWnd, NULL, FALSE);
+            Refresh();
         }
     } else {
         DWORD helperExitCode = ERROR_GEN_FAILURE;
@@ -580,7 +609,7 @@ void GraphPopup::UpdateStartupEntry() {
             helperExitCode != 0) {
             m_applyPowerLimitOnStartup = true;
             SaveSettings();
-            InvalidateRect(m_hWnd, NULL, FALSE);
+            Refresh();
         }
     }
 }

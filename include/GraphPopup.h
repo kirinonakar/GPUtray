@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <gdiplus.h>
 #include <deque>
+#include <memory>
 #include <vector>
 #include "GpuMonitor.h"
 
@@ -21,6 +22,8 @@ public:
 
 private:
     void OnPaint(HWND hWnd);
+    void RenderBackBuffer();
+    void Refresh();
     void DrawGraphItem(Gdiplus::Graphics& g, Metric metric, const std::wstring& label, const std::deque<float>& history, int& yPos, Gdiplus::Color color, float currentVal, const std::wstring& unit, const std::wstring& extra = L"", float graphMax = 100.0f, bool valueAvailable = true, bool showCurrentValue = true, bool showGraph = true, bool showCheckbox = true);
     void UpdateTrayMetrics();
     void AdjustPowerLimit(int deltaPercent, bool useDefault = false);
@@ -62,6 +65,12 @@ private:
     } m_history;
 
     SystemStats m_lastStats = { 0 };
+
+    // Keep a rendered frame ready while the popup is hidden.  The first
+    // right-click then only has to copy this bitmap to the window instead of
+    // allocating and drawing the complete dashboard on the critical path.
+    std::unique_ptr<Gdiplus::Bitmap> m_backBuffer;
+    bool m_backBufferDirty = true;
 
     const int m_historyLimit = 320;
     const int m_width = 950;
